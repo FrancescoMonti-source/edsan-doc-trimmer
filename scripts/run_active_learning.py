@@ -35,6 +35,7 @@ def run_pipeline(
     lr_v1: float = 2e-5,
     lr_v2: float = 5e-6,
     use_mock: bool = False,
+    concurrency: int = 15,
 ):
     """Executes the complete active learning cycle."""
     out_base = Path(output_dir)
@@ -70,6 +71,7 @@ def run_pipeline(
         model=teacher_model,
         use_mock=use_mock,
         resume=True,
+        concurrency=concurrency,
     )
     logger.info("Seed annotation complete: %s", seed_annotated_path)
 
@@ -124,6 +126,7 @@ def run_pipeline(
         model=teacher_model,
         use_mock=use_mock,
         resume=True,
+        concurrency=concurrency,
     )
     logger.info("Teacher adjudication complete: %s", mined_annotated_path)
 
@@ -171,6 +174,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--mine_top_k", type=int, default=200)
     parser.add_argument("--teacher_model", type=str, default=DEFAULT_TEACHER_MODEL)
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=15,
+        help="Number of concurrent worker threads for OpenAI calls (default: 15)",
+    )
     parser.add_argument("--output_dir", type=str, default="./artifacts/active_learning")
     parser.add_argument(
         "--mock", action="store_true", help="Use mock heuristic teacher for testing"
@@ -190,6 +199,7 @@ if __name__ == "__main__":
         pool_size=args.pool_size,
         mine_top_k=args.mine_top_k,
         teacher_model=args.teacher_model,
+        concurrency=args.concurrency,
         output_dir=args.output_dir,
         use_mock=is_mock,
     )

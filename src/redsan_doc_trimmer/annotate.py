@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import re
+import time
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -30,7 +32,7 @@ RÈGLE D'OR MÉDICALE (COÛT ASYMÉTRIQUE DES ERREURS) :
 1. hospital_header : En-têtes hospitaliers (CHU, hôpitaux, pôles, adresses postales de l'établissement, numéros de téléphone/fax/email du standard ou secrétariat).
 2. signature_block : Blocs de signature isolés en bas de document (ex: "Secrétariat médical", nom/titre du médecin isolé sans texte clinique associé).
 3. page_footer : Pieds de page ("Page 1/2", "Tourner SVP", mentions légales de transmission et de confidentialité).
-4. form_metadata : Identifiants techniques purs de transmission, codes-barres textuels.
+4. form_metadata : Identifiants techniques purs de transmission, codes-barres textuels, et gabarits de publipostage Word / champs de fusion d'adresse préformatés (ex: «Libellé_Titre_civilité», «Adresse_1», «Code_postal», «Prénom» «Nom», MERGEFIELD). Attention: ce sont des champs modèles vides de traitement de texte, pas de vraies données patient.
 
 Si le document ne contient aucun élément administratif, retourne une liste boilerplate_spans vide.
 """
@@ -133,13 +135,14 @@ def annotate_document_with_openai(
     raw_text: str,
     client: Any | None = None,
     model: str = DEFAULT_TEACHER_MODEL,
+    max_retries: int = 3,
 ) -> DocBoilerplateAnnotation:
     """Annotates a single document using OpenAI structured outputs with gpt-5.6-luna."""
     if client is None:
         try:
             import openai
 
-            client = openai.OpenAI()
+            client = openai.OpenAI(max_retries=5, timeout=60.0)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to initialize OpenAI client. Ensure OPENAI_API_KEY is set or provide a client: {e}"
@@ -150,19 +153,41 @@ def annotate_document_with_openai(
 
     user_prompt = f"Document ID: {doc_id}\nNombre total de lignes: {len(spans)}\n\nCONTENU DU DOCUMENT :\n{formatted_text}"
 
-    completion = client.beta.chat.completions.parse(
-        model=model,
-        messages=[
-            {"role": "system", "content": TEACHER_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        response_format=DocBoilerplateAnnotation,
-    )
+    last_err: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            completion = client.beta.chat.completions.parse(
+                model=model,
+                messages=[
+                    {"role": "system", "content": TEACHER_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                response_format=DocBoilerplateAnnotation,
+            )
 
-    result = completion.choices[0].message.parsed
-    if result is None:
-        raise ValueError(f"Failed to parse structured output for doc {doc_id}")
-    return result
+            result = completion.choices[0].message.parsed
+            if result is None:
+                raise ValueError(f"Failed to parse structured output for doc {doc_id}")
+            return result
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries:
+                backoff = 2 ** attempt
+                logger.warning(
+                    "Doc %s attempt %d/%d failed: %s. Retrying in %ds...",
+                    doc_id,
+                    attempt,
+                    max_retries,
+                    e,
+                    backoff,
+                )
+                time.sleep(backoff)
+            else:
+                logger.error(
+                    "Doc %s failed after %d attempts: %s", doc_id, max_retries, e
+                )
+                raise last_err
+    raise last_err or RuntimeError(f"Unexpected failure annotating doc {doc_id}")
 
 
 def mock_heuristic_annotate(doc_id: str, raw_text: str) -> DocBoilerplateAnnotation:
@@ -315,8 +340,9 @@ def annotate_corpus_file(
     use_mock: bool = False,
     resume: bool = True,
     enforce_clinical_anchors: bool = False,
+    concurrency: int = 15,
 ) -> int:
-    """Processes a raw corpus JSONL file, producing annotated JSONL lines with resumption support."""
+    """Processes a raw corpus JSONL file, producing annotated JSONL lines with resumption and parallel execution."""
     out_path = Path(output_jsonl_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -336,74 +362,126 @@ def annotate_corpus_file(
             len(completed_ids),
         )
 
-    processed_count = 0
-    with (
-        open(input_jsonl_path, "r", encoding="utf-8") as in_f,
-        open(out_path, "a", encoding="utf-8") as out_f,
-    ):
+    # Gather pending documents
+    pending_docs: list[dict] = []
+    with open(input_jsonl_path, "r", encoding="utf-8") as in_f:
         for line in in_f:
-            if max_docs is not None and processed_count >= max_docs:
+            if max_docs is not None and len(pending_docs) >= max_docs:
                 break
             line = line.strip()
             if not line:
                 continue
             doc = json.loads(line)
-            doc_id = doc["doc_id"]
-            if doc_id in completed_ids:
-                continue
+            if doc.get("doc_id") not in completed_ids:
+                pending_docs.append(doc)
 
-            rectxt = doc["rectxt"]
-            spans = extract_lines_with_offsets(rectxt)
+    if not pending_docs:
+        logger.info("All documents already annotated in %s.", output_jsonl_path)
+        return 0
 
-            if use_mock:
-                annotation = mock_heuristic_annotate(doc_id, rectxt)
-            else:
-                annotation = annotate_document_with_openai(
-                    doc_id, rectxt, client=client, model=model
+    logger.info(
+        "Annotating %d pending documents with %s (concurrency=%d)...",
+        len(pending_docs),
+        "mock" if use_mock else model,
+        concurrency if not use_mock else 1,
+    )
+
+    if client is None and not use_mock:
+        try:
+            import openai
+
+            client = openai.OpenAI(max_retries=5, timeout=60.0)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to initialize OpenAI client: {e}"
+            ) from e
+
+    def _process_one(doc: dict) -> dict:
+        doc_id = doc["doc_id"]
+        rectxt = doc["rectxt"]
+        spans = extract_lines_with_offsets(rectxt)
+
+        if use_mock:
+            annotation = mock_heuristic_annotate(doc_id, rectxt)
+        else:
+            annotation = annotate_document_with_openai(
+                doc_id, rectxt, client=client, model=model
+            )
+
+        # Optional clinical anchor check (disabled by default because legacy section columns often leak boilerplate)
+        if enforce_clinical_anchors:
+            clinical_anchors = doc.get("clinical_anchors", {})
+            if isinstance(clinical_anchors, dict) and clinical_anchors:
+                annotation, rescued = validate_against_clinical_anchors(
+                    annotation, spans, clinical_anchors
                 )
-
-            # Optional clinical anchor check (disabled by default because legacy section columns often leak boilerplate)
-            if enforce_clinical_anchors:
-                clinical_anchors = doc.get("clinical_anchors", {})
-                if isinstance(clinical_anchors, dict) and clinical_anchors:
-                    annotation, rescued = validate_against_clinical_anchors(
-                        annotation, spans, clinical_anchors
+                if rescued:
+                    logger.warning(
+                        "Doc %s: Rescued %d lines from clinical anchors",
+                        doc_id,
+                        len(rescued),
                     )
-                    if rescued:
-                        logger.warning(
-                            "Doc %s: Rescued %d lines from clinical anchors",
-                            doc_id,
-                            len(rescued),
-                        )
 
+        annotated_spans = annotation.apply_to_spans(spans)
 
-            annotated_spans = annotation.apply_to_spans(spans)
+        return {
+            "doc_id": doc_id,
+            "rectype": doc.get("rectype"),
+            "recdate": doc.get("recdate"),
+            "sejum": doc.get("sejum"),
+            "char_length": len(rectxt),
+            "line_count": len(spans),
+            "boilerplate_spans": [
+                s.model_dump() for s in annotation.boilerplate_spans
+            ],
+            "lines": [
+                {
+                    "line_index": i,
+                    "start_char": s.start_char,
+                    "end_char": s.end_char,
+                    "text": s.text,
+                    "is_boilerplate": s.is_boilerplate,
+                }
+                for i, s in enumerate(annotated_spans)
+            ],
+        }
 
-            # Export record
-            out_record = {
-                "doc_id": doc_id,
-                "rectype": doc.get("rectype"),
-                "recdate": doc.get("recdate"),
-                "sejum": doc.get("sejum"),
-                "char_length": len(rectxt),
-                "line_count": len(spans),
-                "boilerplate_spans": [
-                    s.model_dump() for s in annotation.boilerplate_spans
-                ],
-                "lines": [
-                    {
-                        "line_index": i,
-                        "start_char": s.start_char,
-                        "end_char": s.end_char,
-                        "text": s.text,
-                        "is_boilerplate": s.is_boilerplate,
-                    }
-                    for i, s in enumerate(annotated_spans)
-                ],
-            }
-            out_f.write(json.dumps(out_record, ensure_ascii=False) + "\n")
-            out_f.flush()
-            completed_ids.add(doc_id)
-            processed_count += 1
+    from tqdm import tqdm
+
+    processed_count = 0
+    # Use single-threaded loop if mock or concurrency <= 1
+    if use_mock or concurrency <= 1:
+        with open(out_path, "a", encoding="utf-8") as out_f:
+            for doc in tqdm(pending_docs, desc="Annotating documents"):
+                try:
+                    out_record = _process_one(doc)
+                    out_f.write(json.dumps(out_record, ensure_ascii=False) + "\n")
+                    out_f.flush()
+                    completed_ids.add(doc["doc_id"])
+                    processed_count += 1
+                except Exception as e:
+                    logger.error("Error annotating doc %s: %s", doc.get("doc_id"), e)
+    else:
+        with open(out_path, "a", encoding="utf-8") as out_f:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=concurrency
+            ) as executor:
+                future_to_doc = {
+                    executor.submit(_process_one, doc): doc for doc in pending_docs
+                }
+                for future in tqdm(
+                    concurrent.futures.as_completed(future_to_doc),
+                    total=len(pending_docs),
+                    desc=f"Annotating documents (parallel x{concurrency})",
+                ):
+                    doc = future_to_doc[future]
+                    try:
+                        out_record = future.result()
+                        out_f.write(json.dumps(out_record, ensure_ascii=False) + "\n")
+                        out_f.flush()
+                        completed_ids.add(doc["doc_id"])
+                        processed_count += 1
+                    except Exception as e:
+                        logger.error("Error annotating doc %s: %s", doc.get("doc_id"), e)
 
     return processed_count
