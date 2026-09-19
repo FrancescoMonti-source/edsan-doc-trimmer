@@ -1,5 +1,6 @@
 #!/usr/bin/env Rscript
-# Stratified extraction script for redsan-doc-trimmer
+# Comprehensive Stratified Extraction Script for redsan-doc-trimmer
+# Stratifies across Year (2000-2025), RECTYPE (500+ types), and SEJUF (398 UFs)
 # Excludes ORDON* (prescriptions) and BT* (transport vouchers)
 
 suppressPackageStartupMessages({
@@ -21,10 +22,10 @@ rds_path <- get_arg(
   "C:/Users/franc/Documents/Datasets/D0740 - dmo nutrition/docs_merged_00_25"
 )
 out_path <- get_arg("--output", "data/raw/corpus_sample.jsonl")
-target_n <- as.integer(get_arg("--n", "2000"))
+target_n <- as.integer(get_arg("--n", "10000"))
 seed_val <- as.integer(get_arg("--seed", "42"))
 
-cat(sprintf("=== redsan-doc-trimmer: Corpus Extraction ===\n"))
+cat(sprintf("=== redsan-doc-trimmer: Comprehensive Corpus Extraction ===\n"))
 cat(sprintf("Input RDS: %s\n", rds_path))
 cat(sprintf("Output:    %s\n", out_path))
 cat(sprintf("Target N:  %d documents\n", target_n))
@@ -34,7 +35,6 @@ if (!file.exists(rds_path)) {
   stop(sprintf("Input file does not exist: %s", rds_path))
 }
 
-# Ensure output directory exists
 out_dir <- dirname(out_path)
 if (!dir.exists(out_dir)) {
   dir.create(out_dir, recursive = TRUE)
@@ -45,7 +45,7 @@ df <- readRDS(rds_path)
 total_raw <- nrow(df)
 cat(sprintf("Loaded %d documents from RDS.\n", total_raw))
 
-# 1. Apply exclusions
+# 1. Apply exclusions (prescriptions and transport vouchers)
 cat("\nApplying exclusion filters (ORDON* and BT*)...\n")
 rectype_clean <- ifelse(is.na(df$RECTYPE), "UNKNOWN", as.character(df$RECTYPE))
 is_ordon <- grepl("^ORDON", rectype_clean, ignore.case = TRUE)
@@ -56,27 +56,22 @@ keep_mask <- !is_ordon & !is_bt & has_valid_text
 filtered_df <- df[keep_mask, ]
 n_filtered <- nrow(filtered_df)
 cat(sprintf(
-  "Remaining clinical documents after filter: %d (excluded %d ORDON/BT/empty records)\n",
+  "Remaining clinical pool after filter: %d documents (excluded %d records)\n",
   n_filtered,
   total_raw - n_filtered
 ))
 
-# 2. Stratification variables
 set.seed(seed_val)
 
-# Era stratification
+# 2. Stratification variables
 years <- as.integer(substr(as.character(filtered_df$RECDATE), 1, 4))
 years[is.na(years)] <- 2015
-era <- ifelse(
-  years < 2010,
-  "2000-2009",
-  ifelse(years <= 2017, "2010-2017", "2018-2025")
-)
+years_str <- as.character(years)
 
-# RECTYPE grouping: keep top types, group very rare into OTHER
+# RECTYPE: Keep top 30 types, group remainder into OTHER_NARRATIVE
 top_types <- names(head(
   sort(table(filtered_df$RECTYPE), decreasing = TRUE),
-  12
+  30
 ))
 rectype_strat <- ifelse(
   filtered_df$RECTYPE %in% top_types,
@@ -84,39 +79,76 @@ rectype_strat <- ifelse(
   "OTHER_NARRATIVE"
 )
 
-# Specialty grouping: top 10 specialties, group rest into OTHER
-top_sejum <- names(head(sort(table(filtered_df$SEJUM), decreasing = TRUE), 10))
-sejum_strat <- ifelse(
-  filtered_df$SEJUM %in% top_sejum,
-  as.character(filtered_df$SEJUM),
-  "OTHER_SPECIALTY"
+# SEJUF (Unités Fonctionnelles): Keep all with >= 10 occurrences, group ultra-rare
+uf_clean <- ifelse(
+  is.na(filtered_df$SEJUF),
+  "UNKNOWN_UF",
+  as.character(filtered_df$SEJUF)
+)
+top_ufs <- names(which(table(uf_clean) >= 10))
+uf_strat <- ifelse(uf_clean %in% top_ufs, uf_clean, "OTHER_UF")
+
+# Service (SEJUM)
+sejum_clean <- ifelse(
+  is.na(filtered_df$SEJUM),
+  "UNKNOWN_UM",
+  as.character(filtered_df$SEJUM)
 )
 
-# Combined stratum
-stratum <- paste(rectype_strat, era, sejum_strat, sep = "__")
+# Combined stratum: Year x RECTYPE x UF
+stratum <- paste(years_str, rectype_strat, uf_strat, sep = "___")
 strata_counts <- table(stratum)
+cat(sprintf(
+  "Total multi-dimensional strata (Year x RECTYPE x UF): %d\n",
+  length(strata_counts)
+))
 
-# Proportional allocation with minimum representation
+# Step A: Guaranteed representation for every unique SEJUF (minimum 3 docs per UF where available)
+cat(
+  "Guaranteeing baseline coverage across all Unités Fonctionnelles (SEJUF)...\n"
+)
+unique_ufs <- unique(uf_clean)
+uf_baseline_indices <- unlist(lapply(unique_ufs, function(u) {
+  idx <- which(uf_clean == u)
+  sample(idx, size = min(3, length(idx)), replace = FALSE)
+}))
+cat(sprintf(
+  "Baseline UF guarantee: %d documents covering %d unique UFs.\n",
+  length(uf_baseline_indices),
+  length(unique_ufs)
+))
+
+# Step B: Proportional allocation for remaining quota
+remaining_target <- max(0, target_n - length(uf_baseline_indices))
 allocations <- pmax(
   1,
-  round(target_n * (as.numeric(strata_counts) / n_filtered))
+  round(remaining_target * (as.numeric(strata_counts) / n_filtered))
 )
-# Normalize to target_n
-scale_factor <- target_n / sum(allocations)
+scale_factor <- remaining_target / sum(allocations)
 allocations <- pmax(1, round(allocations * scale_factor))
 
-# Sample indices per stratum
-cat("Sampling across strata...\n")
-sampled_indices <- unlist(lapply(seq_along(strata_counts), function(i) {
+cat("Sampling proportional allocation across strata...\n")
+prop_indices <- unlist(lapply(seq_along(strata_counts), function(i) {
   strat_name <- names(strata_counts)[i]
   pool <- which(stratum == strat_name)
   n_to_take <- min(allocations[i], length(pool))
   sample(pool, size = n_to_take, replace = FALSE)
 }))
 
-# If slightly under/over target due to rounding, adjust
+# Combine and deduplicate
+sampled_indices <- unique(c(uf_baseline_indices, prop_indices))
+
+# Trim or fill to exact target_n
 if (length(sampled_indices) > target_n) {
-  sampled_indices <- sample(sampled_indices, size = target_n, replace = FALSE)
+  # Always preserve the UF baseline, trim from proportional
+  excess <- length(sampled_indices) - target_n
+  trimmable <- setdiff(sampled_indices, uf_baseline_indices)
+  to_drop <- sample(
+    trimmable,
+    size = min(excess, length(trimmable)),
+    replace = FALSE
+  )
+  sampled_indices <- setdiff(sampled_indices, to_drop)
 } else if (length(sampled_indices) < target_n) {
   remaining <- setdiff(seq_len(n_filtered), sampled_indices)
   n_extra <- min(target_n - length(sampled_indices), length(remaining))
@@ -129,43 +161,51 @@ if (length(sampled_indices) > target_n) {
 }
 
 sample_df <- filtered_df[sampled_indices, ]
-cat(sprintf("Selected sample size: %d documents\n\n", nrow(sample_df)))
-
-# 3. Print Stratification Breakdown
-cat("=== Sample Breakdown by Document Type (RECTYPE) ===\n")
-print(sort(table(sample_df$RECTYPE, useNA = "always"), decreasing = TRUE))
-
-cat("\n=== Sample Breakdown by Era ===\n")
-sample_years <- as.integer(substr(as.character(sample_df$RECDATE), 1, 4))
-sample_era <- ifelse(
-  sample_years < 2010,
-  "2000-2009",
-  ifelse(sample_years <= 2017, "2010-2017", "2018-2025")
-)
-print(table(sample_era))
-
-cat("\n=== Sample Breakdown by Specialty (SEJUM, top 10) ===\n")
-print(head(
-  sort(table(sample_df$SEJUM, useNA = "always"), decreasing = TRUE),
-  10
+cat(sprintf(
+  "\n=== Selected Final Sample: %d documents ===\n\n",
+  nrow(sample_df)
 ))
 
-# 4. Identify anchor section columns (clinical content verification)
-sec_cols <- c(
-  "RECTXT_TRUE_CONCLUSIONDIAGNOSTIC",
-  "RECTXT_TRUE_EXAMENCLINIQUE",
-  "RECTXT_TRUE_RESULTATS",
-  "RECTXT_TRUE_MOTIFINDICATION",
-  "RECTXT_TRUE_ANTECEDENTS",
-  "RECTXT_TRUE_ANAMNESE",
-  "RECTXT_TRUE_HISTOIRERECENTE",
-  "RECTXT_TRUE_TRAITEMENTDESORTIE",
-  "RECTXT_TRUE_CONSIGNESDESORTIE"
-)
-available_sec_cols <- intersect(sec_cols, names(sample_df))
+# 3. Stratification Breakdown & Diversity Audit
+sample_years <- as.integer(substr(as.character(sample_df$RECDATE), 1, 4))
+sample_ufs <- as.character(sample_df$SEJUF)
+sample_ums <- as.character(sample_df$SEJUM)
+sample_types <- as.character(sample_df$RECTYPE)
 
-# 5. Export to JSONL
-cat(sprintf("\nWriting %d records to %s...\n", nrow(sample_df), out_path))
+cat(sprintf("Diversity in Sample:\n"))
+cat(sprintf(
+  "  - Unique Years:               %d (Range: %d to %d)\n",
+  length(unique(sample_years)),
+  min(sample_years, na.rm = TRUE),
+  max(sample_years, na.rm = TRUE)
+))
+cat(sprintf(
+  "  - Unique Unités Fonctionnelles (SEJUF): %d / %d (%.1f%% of all hospital UFs)\n",
+  length(unique(sample_ufs)),
+  length(unique_ufs),
+  100 * length(unique(sample_ufs)) / length(unique_ufs)
+))
+cat(sprintf(
+  "  - Unique Medical Services (SEJUM):     %d / %d\n",
+  length(unique(sample_ums)),
+  length(unique(sejum_clean))
+))
+cat(sprintf(
+  "  - Unique Document Types (RECTYPE):     %d\n\n",
+  length(unique(sample_types))
+))
+
+cat("=== Document Count by Year in Sample ===\n")
+print(table(sample_years))
+
+cat("\n=== Top 15 Document Types in Sample ===\n")
+print(head(sort(table(sample_types), decreasing = TRUE), 15))
+
+cat("\n=== Top 15 Medical Services (SEJUM) in Sample ===\n")
+print(head(sort(table(sample_ums), decreasing = TRUE), 15))
+
+# 4. Export Clean JSONL (without corrupted legacy columns)
+cat(sprintf("\nWriting %d clean records to %s...\n", nrow(sample_df), out_path))
 con <- file(out_path, open = "wt", encoding = "UTF-8")
 
 for (i in seq_len(nrow(sample_df))) {
@@ -186,16 +226,6 @@ for (i in seq_len(nrow(sample_df))) {
   }
 
   raw_txt <- as.character(sample_df$RECTXT[i])
-
-  # Collect non-NA anchor sections
-  anchors <- list()
-  for (col in available_sec_cols) {
-    val <- sample_df[[col]][i]
-    if (!is.na(val) && nchar(trimws(as.character(val))) > 0) {
-      clean_name <- sub("^RECTXT_TRUE_", "", col)
-      anchors[[clean_name]] <- as.character(val)
-    }
-  }
 
   rec <- list(
     doc_id = doc_id,
@@ -219,10 +249,14 @@ for (i in seq_len(nrow(sample_df))) {
     } else {
       NULL
     },
+    sejuf = if (!is.na(sample_df$SEJUF[i])) {
+      as.character(sample_df$SEJUF[i])
+    } else {
+      NULL
+    },
     char_length = nchar(raw_txt),
     line_count = length(strsplit(raw_txt, "\r?\n")[[1]]),
-    rectxt = raw_txt,
-    clinical_anchors = anchors
+    rectxt = raw_txt
   )
 
   json_line <- toJSON(rec, auto_unbox = TRUE, null = "null")
