@@ -2,29 +2,37 @@
 
 from __future__ import annotations
 
-import os
+import argparse
 from pathlib import Path
-import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import onnxruntime as ort
+
 import numpy as np
+import onnxruntime as ort
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 
 def export_to_onnx(
     model_path: str,
-    output_onnx_path: str,
+    output_dir: str = "./artifacts/drbert-trimmer-onnx",
+    onnx_filename: str = "model.onnx",
     opset_version: int = 17,
 ):
     """Exports a fine-tuned DrBERT model to ONNX format with dynamic batch and sequence axes."""
-    Path(output_onnx_path).parent.mkdir(parents=True, exist_ok=True)
+    out_dir_path = Path(output_dir)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+    output_onnx_path = str(out_dir_path / onnx_filename)
 
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     model = AutoModelForSequenceClassification.from_pretrained(model_path)
     model.eval()
 
+    # Save tokenizer assets next to model.onnx for standalone consumption by redsan
+    tokenizer.save_pretrained(str(out_dir_path))
+    model.config.save_pretrained(str(out_dir_path))
+
     # Dummy inputs for tracing
     dummy_text = "Dr. Martin - Service de Médecine Interne"
-    dummy_context = "CHRU de Rennes \n Bâtiment B"
+    dummy_context = "CHRU de Rouen \n Bâtiment B"
     inputs = tokenizer(
         dummy_text,
         dummy_context,
@@ -61,7 +69,7 @@ def export_to_onnx(
         opset_version=opset_version,
         do_constant_folding=True,
     )
-    print("ONNX export completed.")
+    print(f"ONNX export completed: {output_onnx_path}")
 
     # Verification with ONNX Runtime
     print("Verifying numerical parity with ONNX Runtime...")
@@ -77,8 +85,22 @@ def export_to_onnx(
 
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 2:
-        export_to_onnx(sys.argv[1], sys.argv[2])
-    else:
-        print("Usage: python export_onnx.py <model_checkpoint_dir> <output_onnx_file>")
+    parser = argparse.ArgumentParser(
+        description="Export fine-tuned trimmer model to ONNX for redsan"
+    )
+    parser.add_argument(
+        "model_path", type=str, help="Path to checkpoint directory or HF hub model name"
+    )
+    parser.add_argument(
+        "--output_dir", type=str, default="./artifacts/drbert-trimmer-onnx"
+    )
+    parser.add_argument("--filename", type=str, default="model.onnx")
+    parser.add_argument("--opset", type=int, default=17)
+    args = parser.parse_args()
+
+    export_to_onnx(
+        model_path=args.model_path,
+        output_dir=args.output_dir,
+        onnx_filename=args.filename,
+        opset_version=args.opset,
+    )
