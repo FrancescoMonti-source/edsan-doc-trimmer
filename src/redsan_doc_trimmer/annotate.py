@@ -314,6 +314,7 @@ def annotate_corpus_file(
     model: str = DEFAULT_TEACHER_MODEL,
     use_mock: bool = False,
     resume: bool = True,
+    enforce_clinical_anchors: bool = False,
 ) -> int:
     """Processes a raw corpus JSONL file, producing annotated JSONL lines with resumption support."""
     out_path = Path(output_jsonl_path)
@@ -361,18 +362,20 @@ def annotate_corpus_file(
                     doc_id, rectxt, client=client, model=model
                 )
 
-            # Enforce clinical anchor safety
-            clinical_anchors = doc.get("clinical_anchors", {})
-            if isinstance(clinical_anchors, dict) and clinical_anchors:
-                annotation, rescued = validate_against_clinical_anchors(
-                    annotation, spans, clinical_anchors
-                )
-                if rescued:
-                    logger.warning(
-                        "Doc %s: Rescued %d lines from clinical anchors",
-                        doc_id,
-                        len(rescued),
+            # Optional clinical anchor check (disabled by default because legacy section columns often leak boilerplate)
+            if enforce_clinical_anchors:
+                clinical_anchors = doc.get("clinical_anchors", {})
+                if isinstance(clinical_anchors, dict) and clinical_anchors:
+                    annotation, rescued = validate_against_clinical_anchors(
+                        annotation, spans, clinical_anchors
                     )
+                    if rescued:
+                        logger.warning(
+                            "Doc %s: Rescued %d lines from clinical anchors",
+                            doc_id,
+                            len(rescued),
+                        )
+
 
             annotated_spans = annotation.apply_to_spans(spans)
 
