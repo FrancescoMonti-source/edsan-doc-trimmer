@@ -18,3 +18,6 @@ Part of the **redsan** ecosystem: trains student models (using `DrBERT/DrBERT-7G
 uv venv
 uv pip install -e ".[dev]"
 ```
+
+For the step-by-step pipeline execution and active learning instructions, see **[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md)**.
+
