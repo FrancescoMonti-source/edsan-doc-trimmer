@@ -1,0 +1,27 @@
+[project]
+name = "redsan-doc-trimmer"
+version = "0.1.0"
+description = "DrBERT-based model training and ONNX export for trimming non-clinical boilerplate from hospital documents in the redsan ecosystem"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2.0",
+    "transformers>=4.40.0",
+    "datasets>=2.18.0",
+    "accelerate>=0.28.0",
+    "onnx>=1.16.0",
+    "onnxruntime>=1.17.0",
+    "pydantic>=2.6.0",
+    "scikit-learn>=1.4.0",
+    "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
