@@ -8,6 +8,7 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 
 from redsan_doc_trimmer.dataset import (
     DocumentSpan,
@@ -195,9 +196,14 @@ def scan_mining_pool(
     device: torch.device | None = None,
 ) -> list[HardCaseResult]:
     """Scans an unlabeled pool of documents, ranking them by hardness score."""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    model.eval()
+
     results: list[HardCaseResult] = []
 
-    for doc in candidate_documents:
+    for doc in tqdm(candidate_documents, desc="Phase 3: Mining hard cases", unit="doc"):
         doc_id = doc.get("doc_id", "unknown")
         rectxt = doc.get("rectxt", "")
         rectype = doc.get("rectype")

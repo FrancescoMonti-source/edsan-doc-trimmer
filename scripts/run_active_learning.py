@@ -26,6 +26,7 @@ logger = logging.getLogger("active_learning_pipeline")
 def run_pipeline(
     corpus_jsonl: str = "data/raw/corpus_sample.jsonl",
     seed_size: int = 400,
+    pool_size: int | None = None,
     mine_top_k: int = 200,
     teacher_model: str = DEFAULT_TEACHER_MODEL,
     output_dir: str = "./artifacts/active_learning",
@@ -53,7 +54,8 @@ def run_pipeline(
         )
 
     seed_docs = all_docs[:seed_size]
-    pool_docs = all_docs[seed_size:]
+    available_pool = all_docs[seed_size:]
+    pool_docs = available_pool[:pool_size] if pool_size is not None else available_pool
 
     seed_raw_path = processed_dir / "seed_pool_raw.jsonl"
     with open(seed_raw_path, "w", encoding="utf-8") as f:
@@ -161,6 +163,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--corpus", type=str, default="data/raw/corpus_sample.jsonl")
     parser.add_argument("--seed_size", type=int, default=400)
+    parser.add_argument(
+        "--pool_size",
+        type=int,
+        default=None,
+        help="Optional limit on how many candidate pool documents to scan in Phase 3",
+    )
     parser.add_argument("--mine_top_k", type=int, default=200)
     parser.add_argument("--teacher_model", type=str, default=DEFAULT_TEACHER_MODEL)
     parser.add_argument("--output_dir", type=str, default="./artifacts/active_learning")
@@ -179,6 +187,7 @@ if __name__ == "__main__":
     run_pipeline(
         corpus_jsonl=args.corpus,
         seed_size=args.seed_size,
+        pool_size=args.pool_size,
         mine_top_k=args.mine_top_k,
         teacher_model=args.teacher_model,
         output_dir=args.output_dir,
