@@ -25,7 +25,7 @@ from transformers import (
 from redsan_doc_trimmer.dataset import WindowedLineSample, load_annotated_samples
 
 # Default pre-trained French biomedical encoder
-DEFAULT_MODEL_NAME = "DrBERT/DrBERT-7GB"
+DEFAULT_MODEL_NAME = "Dr-BERT/DrBERT-7GB"
 
 
 class AsymmetricTrainer(Trainer):
