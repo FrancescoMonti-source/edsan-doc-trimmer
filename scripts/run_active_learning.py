@@ -178,7 +178,7 @@ if __name__ == "__main__":
         "--concurrency",
         type=int,
         default=15,
-        help="Number of concurrent worker threads for OpenAI calls (default: 15)",
+        help="Number of concurrent worker threads for teacher annotations (default: 15)",
     )
     parser.add_argument("--output_dir", type=str, default="./artifacts/active_learning")
     parser.add_argument(
@@ -190,7 +190,7 @@ if __name__ == "__main__":
     is_mock = args.mock or ("OPENAI_API_KEY" not in os.environ)
     if is_mock and not args.mock:
         logger.info(
-            "OPENAI_API_KEY not found in environment; using mock teacher for dry-run."
+            "Teacher credentials not found in environment; using mock teacher for dry-run."
         )
 
     run_pipeline(

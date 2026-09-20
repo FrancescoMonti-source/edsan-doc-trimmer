@@ -17,7 +17,7 @@ Across these documents, **25% to 35% of the text is repetitive administrative bo
 * Mail-merge artifacts from word processors (`MERGEFIELD`, `FORMCHECKBOX`).
 
 ### Why not just use regular expressions?
-Hospital documents span decades (2000–2025) across hundreds of clinical wards. Line wrapping is inconsistent, OCR errors are common, and physicians often embed critical clinical notes right next to administrative stamps. Rigid regexes either miss subtle boilerplate or accidentally cut into medical text.
+Hospital documents span decades (2000–2025) across hundreds of clinical care units and medical services within the hospital. Line wrapping is inconsistent, OCR errors are common, and physicians often embed critical clinical notes right next to administrative stamps. Rigid regexes either miss subtle boilerplate or accidentally cut into medical text.
 
 ### The Cardinal Rule: Asymmetric Cost of Error
 In medical NLP, errors are not equal:
@@ -35,7 +35,7 @@ Instead of manually labeling tens of thousands of lines from scratch, we used a 
 ```
                   ┌──────────────────────────────────────────────┐
                   │ 10,000 Multi-Dimensional Stratified Corpus   │
-                  │ (26 years, 381 hospital units, 94 doc types) │
+                  │ (26 years, 381 care units, 75 departments)   │
                   └──────────────────────┬───────────────────────┘
                                          │
                                          ▼
@@ -60,18 +60,18 @@ Instead of manually labeling tens of thousands of lines from scratch, we used a 
                      Final artifact: model.onnx (442 MB)
                      • 98.12% Clinical Recall
                      • 97.89% Boilerplate Precision
-                     • 100% Local & Private (0 API costs)
+                     • 100% Local, Fast & On-Premises
 ```
 
 ### 1. Multi-Dimensional Stratified Sampling
-We extracted a representative 10,000-document sample from EDSAN covering:
+All documents originate from the same hospital's clinical data warehouse (EDSAN). To capture the full diversity of medical writing and formatting across the establishment, we extracted a 10,000-document sample stratified across:
 * **All 26 individual years** (2000 to 2025).
-* **381 hospital clinics and wards** (`SEJUF`, representing 95.7% of all units).
-* **75 medical services** (`SEJUM`, 100% coverage).
+* **381 clinical care units and wards** (`SEJUF`, representing 95.7% of all functional units across the hospital).
+* **75 medical services / departments** (`SEJUM`, 100% departmental coverage).
 * **94 clinical document types** (`RECTYPE`).
 
 ### 2. Weak Supervision via LLM Teacher
-Labeling 100,000+ lines manually is cost-prohibitive. We used an LLM teacher with structured outputs to identify boilerplate spans on an initial seed batch of 1,000 documents (~$0.30 total API cost). The teacher returns start/end line intervals rather than line-by-line classification, keeping annotations fast and affordable.
+Labeling 100,000+ lines manually is prohibitively time-consuming. We used an LLM teacher with structured outputs to identify boilerplate spans on an initial seed batch of 1,000 documents. The teacher returns start/end line intervals rather than line-by-line classification, keeping annotations fast and compact.
 
 ### 3. Student Model Training (DrBERT)
 We trained a specialized student model using **DrBERT** (`Dr-BERT/DrBERT-7GB`), a language model pre-trained on French biomedical text:
@@ -96,8 +96,8 @@ Every prediction maps back to exact character intervals `[start_char, end_char]`
 $$\text{substring}(\text{raw\_rectxt}, \text{start}, \text{end}) == \text{preserved\_text}$$
 This provides 100% traceability and auditability for medical coding and clinical validation.
 
-### 2. Zero Cloud Dependencies & Hospital Privacy
-In production, the ONNX model runs locally inside the hospital network via CPU or local GPU. No patient health information (PHI) ever leaves the secure hospital environment, and runtime cost is $0.00.
+### 2. Fully On-Premises & Hospital Privacy
+In production, the ONNX model runs completely on-premises inside the hospital network via CPU or local GPU. No patient health information (PHI) ever leaves the secure hospital infrastructure.
 
 ---
 

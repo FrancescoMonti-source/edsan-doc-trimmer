@@ -135,11 +135,11 @@ def format_doc_for_llm(spans: list[DocumentSpan]) -> str:
 def annotate_document_with_openai(
     doc_id: str,
     raw_text: str,
-    client: Any | None = None,
+    client: Any = None,
     model: str = DEFAULT_TEACHER_MODEL,
     max_retries: int = 3,
 ) -> DocBoilerplateAnnotation:
-    """Annotates a single document using OpenAI structured outputs with an LLM teacher."""
+    """Annotates a single document using structured outputs with an LLM teacher."""
     if client is None:
         try:
             import openai

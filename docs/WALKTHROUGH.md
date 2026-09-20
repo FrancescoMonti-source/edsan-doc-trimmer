@@ -10,15 +10,15 @@ This document describes how the `redsan-doc-trimmer` pipeline works and how to r
    * Reads the 268k EDSAN hospital documents (`docs_merged_00_25`).
    * Strips out all prescriptions (`ORDON*`) and transport vouchers (`BT*`).
    * Discards noisy legacy section columns that leaked doctor signatures and hospital headers.
-   * Extracts a **10,000-document multi-dimensional stratified sample** into `data/raw/corpus_sample.jsonl`:
+   * Extracts a **10,000-document multi-dimensional stratified sample** from the hospital's clinical data warehouse into `data/raw/corpus_sample.jsonl`:
      * **All 26 individual years** (2000 through 2025).
-     * **381 hospital wards / clinics** (`SEJUF`, 95.7% of all hospital units).
-     * **75 medical services** (`SEJUM`, 100% coverage).
+     * **381 clinical care units and wards** (`SEJUF`, covering 95.7% of all functional units across the hospital).
+     * **75 medical services / departments** (`SEJUM`, 100% departmental coverage).
      * **94 distinct clinical document types** (`RECTYPE`).
 
 2. **Weak Supervision Teacher (`src/redsan_doc_trimmer/annotate.py`)**:
    * Uses an LLM teacher with structured outputs (`BoilerplateSpan`) to detect administrative header, footer, and signature spans.
-   * Cost: Only ~$0.30 per 1,000 documents (returns line spans rather than verbose JSON per line).
+   * Returns line spans rather than verbose line-by-line classifications, keeping annotations fast and compact.
 
 3. **DrBERT Student Model (`src/redsan_doc_trimmer/train.py`)**:
    * Uses `Dr-BERT/DrBERT-7GB` pre-trained on French biomedical text.
@@ -40,7 +40,7 @@ This document describes how the `redsan-doc-trimmer` pipeline works and how to r
 
 ## 2. How to Run the Pipeline
 
-### Option A: Fast Dry-Run Test (Zero Cost, No API Key Required)
+### Option A: Fast Dry-Run Test with Mock Heuristic Teacher
 You can test the entire pipeline locally in ~35 seconds using the built-in mock heuristic teacher:
 
 ```powershell
@@ -52,14 +52,13 @@ python scripts/run_active_learning.py --mock --seed_size 10 --pool_size 20 --min
 ```
 
 ### Option B: Production Run with LLM Teacher & RTX 3080
-Because your `OPENAI_API_KEY` is already present in your environment variables, Python automatically detects it without needing to type or paste it!
 
 ```powershell
 # Activate virtual environment
 .venv\Scripts\activate
 
 # Run the production active learning cycle:
-# 1,000 seed documents + 500 mined hard cases (~$0.45 total API cost)
+# 1,000 seed documents + 500 mined hard cases
 python scripts/run_active_learning.py --seed_size 1000 --mine_top_k 500
 ```
 
