@@ -28,3 +28,4 @@ Any text conveying patient history, symptoms, physical findings, vital signs, la
 
 ### Active Learning Mining Margin
 The uncertainty window where the student model's predicted probability of boilerplate is borderline ($p \in [0.35, 0.65]$). Documents containing lines in this margin represent hard negative candidates selected for teacher re-annotation and human curation.
+

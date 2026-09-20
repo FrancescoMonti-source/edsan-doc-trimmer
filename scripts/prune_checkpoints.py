@@ -49,3 +49,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     prune_checkpoints(artifacts_dir=args.artifacts_dir, dry_run=args.dry_run)
+
