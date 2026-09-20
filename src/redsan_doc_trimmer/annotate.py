@@ -15,9 +15,11 @@ from pydantic import BaseModel, Field
 
 from redsan_doc_trimmer.dataset import DocumentSpan, extract_lines_with_offsets
 
+import os
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_TEACHER_MODEL = "gpt-5.6-luna"
+DEFAULT_TEACHER_MODEL = os.getenv("TEACHER_MODEL", "gpt-4o")
 
 TEACHER_SYSTEM_PROMPT = """Tu es un expert en traitement de documents médicaux hospitaliers français (dossiers patients EDSAN / RECTXT).
 Ton rôle est d'identifier EXCLUSIVEMENT les blocs de lignes qui relèvent STRICTEMENT du cadre administratif et de la mise en page (boilerplate / en-têtes / pieds de page), SANS JAMAIS marquer le contenu clinique.
@@ -137,7 +139,7 @@ def annotate_document_with_openai(
     model: str = DEFAULT_TEACHER_MODEL,
     max_retries: int = 3,
 ) -> DocBoilerplateAnnotation:
-    """Annotates a single document using OpenAI structured outputs with gpt-5.6-luna."""
+    """Annotates a single document using OpenAI structured outputs with an LLM teacher."""
     if client is None:
         try:
             import openai

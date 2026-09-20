@@ -17,7 +17,7 @@ This document describes how the `redsan-doc-trimmer` pipeline works and how to r
      * **94 distinct clinical document types** (`RECTYPE`).
 
 2. **Weak Supervision Teacher (`src/redsan_doc_trimmer/annotate.py`)**:
-   * Uses `gpt-5.6-luna` with structured outputs (`BoilerplateSpan`) to detect administrative header, footer, and signature spans.
+   * Uses an LLM teacher with structured outputs (`BoilerplateSpan`) to detect administrative header, footer, and signature spans.
    * Cost: Only ~$0.30 per 1,000 documents (returns line spans rather than verbose JSON per line).
 
 3. **DrBERT Student Model (`src/redsan_doc_trimmer/train.py`)**:
@@ -29,12 +29,12 @@ This document describes how the `redsan-doc-trimmer` pipeline works and how to r
 4. **Active Learning & Hard-Negative Mining (`src/redsan_doc_trimmer/mining.py`)**:
    * Student v1 scans thousands of unlabeled candidate documents on the GPU (with a live animated progress bar).
    * Automatically isolates the hardest, most ambiguous edge cases (lines where probability is borderline: $p \in [0.35, 0.65]$).
-   * GPT-5.6 Luna adjudicates only those mined hard cases.
+   * The LLM teacher pre-annotates those mined hard cases before human curation.
    * Student v2 is fine-tuned on the augmented dataset with a refined learning rate (`5e-6`).
 
 5. **Standalone ONNX Export (`src/redsan_doc_trimmer/export_onnx.py`)**:
    * Exports the final model to `artifacts/active_learning/onnx_export/model.onnx` along with tokenizer assets.
-   * Upstream `redsan` in R executes this model in-process with zero Python dependencies!
+   * Upstream `redsan` in R executes this model via a fast background batch service with zero cloud/API dependencies!
 
 ---
 
@@ -51,7 +51,7 @@ You can test the entire pipeline locally in ~35 seconds using the built-in mock 
 python scripts/run_active_learning.py --mock --seed_size 10 --pool_size 20 --mine_top_k 5
 ```
 
-### Option B: Production Run with GPT-5.6 Luna & RTX 3080
+### Option B: Production Run with LLM Teacher & RTX 3080
 Because your `OPENAI_API_KEY` is already present in your environment variables, Python automatically detects it without needing to type or paste it!
 
 ```powershell
@@ -72,7 +72,7 @@ python scripts/run_active_learning.py --seed_size 1000 --mine_top_k 500
 
 ## 3. Production Model & Active Learning Results
 
-Following weak supervision by GPT-5.6 Luna and **100% human-in-the-loop manual review of 500 mined edge cases**, Student v2 was fine-tuned on 1,500 curated documents (100,047 lines) on the NVIDIA RTX 3080 GPU.
+Following weak supervision by an LLM teacher and **100% human-in-the-loop manual review of 500 mined edge cases**, Student v2 was fine-tuned on 1,500 curated documents (100,047 lines) on the NVIDIA RTX 3080 GPU.
 
 ### Final Holdout Validation Metrics (20,010 lines)
 * **Clinical Recall**: `98.12%` *(The Cardinal Rule: zero destruction of medical facts)*
