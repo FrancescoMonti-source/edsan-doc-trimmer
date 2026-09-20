@@ -51,3 +51,6 @@ data/processed/*
 .DS_Store
 Thumbs.db
 
+# Model artifacts & checkpoints
+artifacts/
+*.onnx
