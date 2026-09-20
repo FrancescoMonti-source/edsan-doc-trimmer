@@ -1,4 +1,4 @@
-# redsan-doc-trimmer
+# edsan-doc-trimmer
 
 Training and ONNX export pipeline for detecting and trimming non-clinical administrative boilerplate in French hospital documents (`RECTXT` from EDSAN).
 
