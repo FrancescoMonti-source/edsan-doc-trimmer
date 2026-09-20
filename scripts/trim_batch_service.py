@@ -12,11 +12,19 @@ import argparse
 import json
 import re
 import sys
+import os
 from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
-from transformers import AutoTokenizer
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+try:
+    from tokenizers import Tokenizer
+    USE_RUST_TOKENIZER = True
+except ImportError:
+    USE_RUST_TOKENIZER = False
 
 from redsan_doc_trimmer.dataset import build_windowed_samples, extract_lines_with_offsets
 
@@ -38,11 +46,36 @@ def trim_batch(
     onnx_dir: str = "artifacts/active_learning/onnx_export",
     threshold: float = 0.50,
     apply_hybrid_rules: bool = True,
-    batch_size: int = 64,
+    batch_size: int = 128,
 ) -> list[dict]:
-    onnx_path = str(Path(onnx_dir) / "model.onnx")
-    tokenizer = AutoTokenizer.from_pretrained(onnx_dir)
-    session = ort.InferenceSession(onnx_path)
+    dir_path = Path(onnx_dir)
+    safetensors_path = dir_path / "model.safetensors"
+    use_cuda = torch.cuda.is_available() and safetensors_path.exists()
+
+    if use_cuda:
+        device = torch.device("cuda")
+        tokenizer = AutoTokenizer.from_pretrained(onnx_dir)
+        model = AutoModelForSequenceClassification.from_pretrained(onnx_dir).to(device)
+        model.eval()
+        rust_tok = False
+    else:
+        device = None
+        model = None
+        onnx_path = str(dir_path / "model.onnx")
+        sess_opts = ort.SessionOptions()
+        sess_opts.intra_op_num_threads = os.cpu_count() or 8
+        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        session = ort.InferenceSession(onnx_path, sess_opts, providers=["CPUExecutionProvider"])
+
+        tok_json = dir_path / "tokenizer.json"
+        if USE_RUST_TOKENIZER and tok_json.exists():
+            tokenizer = Tokenizer.from_file(str(tok_json))
+            tokenizer.enable_padding(length=128, pad_id=1, pad_token="<pad>")
+            tokenizer.enable_truncation(max_length=128)
+            rust_tok = True
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(onnx_dir)
+            rust_tok = False
 
     results = []
 
@@ -89,22 +122,44 @@ def trim_batch(
                 targets = [s.target_text for s in batch]
                 contexts = [f"{s.context_before} \n {s.context_after}".strip() for s in batch]
 
-                encodings = tokenizer(
-                    targets,
-                    contexts,
-                    padding=True,
-                    truncation=True,
-                    max_length=256,
-                    return_tensors="np",
-                )
-                ort_inputs = {
-                    "input_ids": encodings["input_ids"],
-                    "attention_mask": encodings["attention_mask"],
-                }
-                logits = session.run(["logits"], ort_inputs)[0]
-
-                exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
-                probs = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
+                if use_cuda:
+                    encodings = tokenizer(
+                        targets,
+                        contexts,
+                        padding=True,
+                        truncation=True,
+                        max_length=128,
+                        return_tensors="pt",
+                    ).to(device)
+                    with torch.inference_mode():
+                        logits = model(**encodings).logits
+                        probs = torch.softmax(logits, dim=-1).cpu().numpy()
+                else:
+                    if rust_tok:
+                        pairs = list(zip(targets, contexts, strict=False))
+                        encs = tokenizer.encode_batch(pairs)
+                        input_ids = np.array([e.ids for e in encs], dtype=np.int64)
+                        attention_mask = np.array([e.attention_mask for e in encs], dtype=np.int64)
+                        ort_inputs = {
+                            "input_ids": input_ids,
+                            "attention_mask": attention_mask,
+                        }
+                    else:
+                        encodings = tokenizer(
+                            targets,
+                            contexts,
+                            padding=True,
+                            truncation=True,
+                            max_length=128,
+                            return_tensors="np",
+                        )
+                        ort_inputs = {
+                            "input_ids": encodings["input_ids"],
+                            "attention_mask": encodings["attention_mask"],
+                        }
+                    logits = session.run(["logits"], ort_inputs)[0]
+                    exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
+                    probs = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
 
                 for s, p in zip(batch, probs, strict=False):
                     p_bp = float(p[1])
