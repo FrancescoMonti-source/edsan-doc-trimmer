@@ -5,7 +5,7 @@
 This repository trains and exports machine learning models (specifically DrBERT-based sequence/span taggers) to distinguish clinical narrative from non-clinical administrative boilerplate in French hospital documents (`RECTXT` from EDSAN).
 
 - **Who calls this**: Used to train models and export ONNX artifacts for upstream consumption by `redsan`.
-- **Output artifact**: The primary deliverable of this repository is an exported ONNX model (`model.onnx`) and tokenizer metadata that `redsan` can execute via an in-process ONNX runtime.
+- **Output artifact**: The primary deliverable of this repository is an exported ONNX model (`model.onnx`) and tokenizer metadata packaged into `edsan-doc-trimmer-v1.0.0.zip`, executed by `redsan` via a background Python batch worker (`trim_batch_service.py`).
 - **Language & Stack**: Python 3.11+, PyTorch, Hugging Face `transformers`, `onnx`, `onnxruntime`.
 
 ## The Cardinal Rule: Asymmetric Cost of Error
