@@ -152,8 +152,8 @@ The release archive contains everything required for standalone, offline inferen
 * **`model.safetensors`** (442.5 MB): PyTorch model weights enabling CUDA GPU acceleration when PyTorch and an NVIDIA GPU are available.
 * **`tokenizer.json`**, **`tokenizer_config.json`**, **`special_tokens_map.json`**: Fast Rust / Hugging Face tokenizer assets.
 * **`config.json`**: Sequence classification architecture metadata.
-* **`artifact.json`**: Manifest declaring `artifact_version` (`1.1.0`) and `worker_contract` (`rectype-aware-v1`).
-* **`trim_batch_service.py`**: High-performance batch inference service invoked by `redsan`.
+* **`artifact.json`**: Manifest declaring `artifact_version` (`1.1.0`) and the contract implemented by the packaged worker (`rectype-aware-v1`).
+* **`trim_batch_service.py`**: High-performance batch inference service invoked by `redsan`. Under `rectype-aware-v1`, it removes a whole document only when the text contains the literal `FORMCHECKBOX` marker and `RECTYPE` is exactly `BT` or starts with `ORDON`; missing, blank, and unrelated types continue to model inference.
 
 ### 1. Where to Get `edsan-doc-trimmer-v1.1.0.zip`
 * **Hospital Internal GitLab**: Navigate to **Deploy > Releases** (tag `v1.1.0`) and download the attached asset `edsan-doc-trimmer-v1.1.0.zip`.

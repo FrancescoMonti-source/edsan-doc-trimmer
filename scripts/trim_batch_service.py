@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Batch document trimming service for redsan R integration.
 
-Accepts JSON input from a file or stdin containing a list of {id, text},
-runs batched DrBERT ONNX inference (with hybrid pre/post rules),
+Accepts JSON input from a file or stdin containing a list of {id, text, rectype},
+runs batched DrBERT ONNX inference,
 and outputs JSON with trimmed text and exact [start_char, end_char] intervals.
 """
 
@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -24,6 +23,8 @@ from dataclasses import dataclass
 
 import numpy as np
 import onnxruntime as ort
+
+WORKER_CONTRACT = "rectype-aware-v1"
 
 try:
     import torch
@@ -197,6 +198,47 @@ except ImportError:
         )
 
 
+def is_transport_voucher(raw_text: str, rectype: object) -> bool:
+    """Return whether the whole document is a confirmed transport voucher.
+
+    The contract is intentionally narrow: the text must contain the literal,
+    case-sensitive Word form marker and RECTYPE must be exactly ``BT`` or start
+    with ``ORDON``. Missing, blank, non-string, and unrelated RECTYPE values do
+    not qualify and therefore continue to ordinary model inference.
+    """
+
+    return (
+        "FORMCHECKBOX" in raw_text
+        and isinstance(rectype, str)
+        and (rectype == "BT" or rectype.startswith("ORDON"))
+    )
+
+
+def _empty_result(doc_id: object, raw_text: str) -> dict:
+    return {
+        "id": doc_id,
+        "trimmed_text": "",
+        "is_bt": False,
+        "raw_chars": len(raw_text),
+        "trimmed_chars": 0,
+        "reduction_pct": 100.0 if raw_text else 0.0,
+        "preserved_intervals": [],
+        "removed_intervals": [],
+    }
+
+
+def _transport_voucher_result(doc_id: object, raw_text: str) -> dict:
+    return {
+        "id": doc_id,
+        "trimmed_text": "",
+        "is_bt": True,
+        "raw_chars": len(raw_text),
+        "trimmed_chars": 0,
+        "reduction_pct": 100.0,
+        "preserved_intervals": [],
+        "removed_intervals": [],
+    }
+
 
 def trim_batch(
     documents: list[dict],
@@ -205,6 +247,23 @@ def trim_batch(
     apply_hybrid_rules: bool = False,
     batch_size: int = 128,
 ) -> list[dict]:
+    precomputed_results: dict[int, dict] = {}
+    for index, doc in enumerate(documents):
+        doc_id = doc.get("id", "doc")
+        raw_text = doc.get("text", "")
+        rectype = doc.get("rectype")
+
+        if not raw_text or not raw_text.strip():
+            precomputed_results[index] = _empty_result(doc_id, raw_text)
+        elif is_transport_voucher(raw_text, rectype):
+            precomputed_results[index] = _transport_voucher_result(doc_id, raw_text)
+
+    # A batch containing only empty documents and confirmed vouchers does not
+    # need to initialize the model runtime. All other documents follow the
+    # ordinary inference path below.
+    if len(precomputed_results) == len(documents):
+        return [precomputed_results[index] for index in range(len(documents))]
+
     dir_path = resolve_model_dir(onnx_dir)
     safetensors_path = dir_path / "model.safetensors"
     use_cuda = (
@@ -244,30 +303,15 @@ def trim_batch(
                 "Please run: pip install tokenizers"
             )
 
-
     results = []
 
-    for doc in documents:
+    for index, doc in enumerate(documents):
+        if index in precomputed_results:
+            results.append(precomputed_results[index])
+            continue
+
         doc_id = doc.get("id", "doc")
         raw_text = doc.get("text", "")
-        # `redsan` sends this beside `id` and `text` and always has. A caller
-        # that omits it gets no voucher fast path at all, which is the safe
-        # direction: every document reaches the model and keeps its text.
-        rectype = doc.get("rectype", "")
-
-        # Check for empty or transport voucher
-        if not raw_text or not raw_text.strip():
-            results.append({
-                "id": doc_id,
-                "trimmed_text": "",
-                "is_bt": False,
-                "raw_chars": len(raw_text),
-                "trimmed_chars": 0,
-                "reduction_pct": 100.0 if raw_text else 0.0,
-                "preserved_intervals": [],
-                "removed_intervals": [],
-            })
-            continue
 
         spans = extract_lines_with_offsets(raw_text)
         samples = build_windowed_samples(spans, window_size=2)
@@ -423,4 +467,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

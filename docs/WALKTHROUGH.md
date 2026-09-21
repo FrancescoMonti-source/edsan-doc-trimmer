@@ -87,7 +87,7 @@ Following weak supervision by an LLM teacher and **100% human-in-the-loop manual
 
 Evaluated across **800 real hospital documents** from `D0840/docs` (65k document warehouse) and `denut.rds` (malnutrition patient cohort):
 * **Total prompt tokens saved**: **~171,600 prompt tokens** (-23.5% to -35.2% net token reduction).
-* **Transport Vouchers (`BT`, `ORDON7`)**: Evaluated directly by Student v3 DrBERT. All deterministic rules and shadow pipelines (`is_transport_voucher`, `POST_BP_PATTERNS`) were eliminated in favor of training signal. Vouchers have administrative checkboxes and form boilerplate stripped by the model, while clinical discharge letters (`CRH2AB`, `LDL2024`) containing tick-boxes preserve 100% of clinical narrative, weights, and conclusions.
+* **Transport Vouchers (`BT`, `ORDON7`)**: The deployed `rectype-aware-v1` worker removes a whole document only when the text contains the literal `FORMCHECKBOX` marker and `RECTYPE` is exactly `BT` or starts with `ORDON`. All other documents, including clinical letters with checkboxes, continue to Student v3 inference.
 * **Interactive Viewer**: [benchmark_viewer.html](file:///artifacts/benchmark_viewer.html) (color-coded side-by-side verification for 50 diverse documents).
 
 ---
@@ -125,8 +125,8 @@ The production model artifact is packaged as `edsan-doc-trimmer-v1.1.0.zip`, con
 * `model.safetensors`: PyTorch model weights enabling CUDA GPU acceleration (442.5 MB)
 * `tokenizer.json`, `tokenizer_config.json`, `special_tokens_map.json`: Fast Rust tokenizer assets
 * `config.json`: Sequence classification architecture metadata
-* `artifact.json`: Metadata manifest (`v1.1.0`, `rectype-aware-v1`)
-* `trim_batch_service.py`: High-performance batch inference worker
+* `artifact.json`: Metadata manifest (`v1.1.0`) whose worker contract is read from the packaged worker
+* `trim_batch_service.py`: High-performance batch inference worker implementing `rectype-aware-v1`
 
 ### 6.2 Distributing via Internal GitLab
 Follow the step-by-step maintainer instructions in **[docs/GITLAB_RELEASE_GUIDE.md](GITLAB_RELEASE_GUIDE.md)** to:

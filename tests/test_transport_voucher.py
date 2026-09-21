@@ -1,13 +1,10 @@
-"""Tests for transport vouchers and discharge letters under pure model trimming.
-
-`is_transport_voucher()` was removed in favor of Student v3 DrBERT retraining.
-There is no longer a deterministic veto or shadow pipeline.
+"""Tests for the worker's rectype-aware-v1 transport-voucher contract.
 
 These cases assert that:
-1. Discharge letters (`CRH2AB`, `LDL2024`) containing `FORMCHECKBOX` preserve
-   all clinical facts verbatim (Poids, Motif, Conclusion).
-2. Transport vouchers are properly trimmed down by the trained model.
-3. Coordinates and grounding guarantees are maintained.
+1. Whole-document removal requires literal `FORMCHECKBOX` and a transport
+   RECTYPE (`BT` or an `ORDON` prefix).
+2. All other documents continue to ordinary model inference.
+3. Coordinates and grounding guarantees are maintained for model output.
 """
 
 from __future__ import annotations
@@ -15,15 +12,15 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip("onnxruntime")
-pytest.importorskip("numpy")
+np = pytest.importorskip("numpy")
 
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from trim_batch_service import trim_batch  # noqa: E402
-
+import trim_batch_service as worker
+from trim_batch_service import is_transport_voucher, trim_batch
 
 # A real bon de transport. All 495 in the corpus are RECTYPE ORDON7.
 VOUCHER = """BT - BON DE TRANSPORT
@@ -55,6 +52,40 @@ Conclusion : denutrition severe dans un contexte d'agression aigue.
 """
 
 
+@pytest.fixture(autouse=True)
+def ordinary_model_runtime(monkeypatch, tmp_path):
+    """Use an all-clinical model so routing tests remain artifact-independent."""
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "model.onnx").write_bytes(b"test model")
+
+    class FakeTokenizer:
+        @classmethod
+        def from_pretrained(cls, _model_dir):
+            return cls()
+
+        def __call__(self, targets, _contexts, **_kwargs):
+            count = len(targets)
+            return {
+                "input_ids": np.zeros((count, 2), dtype=np.int64),
+                "attention_mask": np.ones((count, 2), dtype=np.int64),
+            }
+
+    class FakeSession:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, _outputs, inputs):
+            count = inputs["input_ids"].shape[0]
+            return [np.tile(np.array([[10.0, 0.0]]), (count, 1))]
+
+    monkeypatch.setattr(worker, "resolve_model_dir", lambda _candidate=None: model_dir)
+    monkeypatch.setattr(worker, "USE_RUST_TOKENIZER", False)
+    monkeypatch.setattr(worker, "AutoTokenizer", FakeTokenizer)
+    monkeypatch.setattr(worker.ort, "InferenceSession", FakeSession)
+
+
 def test_discharge_letter_preserves_clinical_facts():
     """Discharge letters must never be blanked and must keep all clinical facts verbatim."""
     docs = [{"id": "letter_1", "text": DISCHARGE_LETTER, "rectype": "CRH2AB"}]
@@ -67,7 +98,9 @@ def test_discharge_letter_preserves_clinical_facts():
     assert "Poids : 72.5 Kg" in trimmed
     assert "Taille : 1.68 m" in trimmed
     assert "Motif d'hospitalisation : sepsis sur pneumopathie communautaire." in trimmed
-    assert "Conclusion : denutrition severe dans un contexte d'agression aigue." in trimmed
+    assert (
+        "Conclusion : denutrition severe dans un contexte d'agression aigue." in trimmed
+    )
 
     # Document must not be zeroed out
     assert res["trimmed_chars"] > 0
@@ -87,14 +120,58 @@ def test_discharge_letter_with_different_rectypes():
         assert res["trimmed_chars"] > 0
 
 
-def test_voucher_is_trimmed_by_model():
-    """Transport vouchers must be significantly trimmed by the model."""
-    docs = [{"id": "v_1", "text": VOUCHER, "rectype": "ORDON7"}]
-    results = trim_batch(docs)
-    assert len(results) == 1
-    res = results[0]
-    # The header and administrative lines should be trimmed
-    assert res["reduction_pct"] > 30.0
+@pytest.mark.parametrize("rectype", ["BT", "ORDON", "ORDON7", "ORDONACTE2"])
+def test_transport_rectype_with_literal_form_marker_is_a_voucher(rectype):
+    assert is_transport_voucher(VOUCHER, rectype)
+
+
+@pytest.mark.parametrize("rectype", [None, "", "   ", "CRH2AB", "BT7", "ordon7", 7])
+def test_missing_blank_or_unrelated_rectype_is_not_a_voucher(rectype):
+    assert not is_transport_voucher(VOUCHER, rectype)
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"id": "missing", "text": VOUCHER},
+        {"id": "blank", "text": VOUCHER, "rectype": ""},
+        {"id": "clinical", "text": VOUCHER, "rectype": "CRH2AB"},
+    ],
+)
+def test_unconfirmed_voucher_continues_to_model_inference(document):
+    result = trim_batch([document])[0]
+
+    assert result["is_bt"] is False
+    assert result["trimmed_text"] == "\n".join(
+        line for line in VOUCHER.splitlines() if line.strip()
+    )
+    assert result["preserved_intervals"]
+
+
+def test_form_marker_inside_clinical_letter_uses_model_inference():
+    assert not is_transport_voucher(DISCHARGE_LETTER, "CRH2AB")
+
+
+def test_transport_rectype_without_literal_form_marker_uses_model_inference():
+    assert not is_transport_voucher("Clinical narrative", "BT")
+    assert not is_transport_voucher("formcheckbox", "ORDON7")
+
+
+@pytest.mark.parametrize("rectype", ["BT", "ORDON7"])
+def test_confirmed_voucher_is_removed_without_loading_a_model(rectype):
+    results = trim_batch([{"id": "v_1", "text": VOUCHER, "rectype": rectype}])
+    assert results == [
+        {
+            "id": "v_1",
+            "trimmed_text": "",
+            "is_bt": True,
+            "raw_chars": len(VOUCHER),
+            "trimmed_chars": 0,
+            "reduction_pct": 100.0,
+            "preserved_intervals": [],
+            "removed_intervals": [],
+        }
+    ]
 
 
 def test_empty_document():
@@ -103,6 +180,7 @@ def test_empty_document():
     results = trim_batch(docs)
     assert len(results) == 1
     assert results[0]["trimmed_text"] == ""
+    assert results[0]["is_bt"] is False
     assert results[0]["trimmed_chars"] == 0
     assert results[0]["preserved_intervals"] == []
 
@@ -119,7 +197,9 @@ def test_coordinates_and_grounding_guarantee():
         start_1 = iv["start"]
         end_1 = iv["end"]
         assert start_1 <= end_1, f"Invalid interval: start {start_1} > end {end_1}"
-        assert len(iv["text"].strip()) > 0, "Preserved interval must not be empty or whitespace"
+        assert len(iv["text"].strip()) > 0, (
+            "Preserved interval must not be empty or whitespace"
+        )
         # In R 1-indexed inclusive [start, end] corresponds to Python [start-1 : end]
         sliced = DISCHARGE_LETTER[start_1 - 1 : end_1]
         assert sliced == iv["text"]
@@ -128,12 +208,18 @@ def test_coordinates_and_grounding_guarantee():
     starts = [iv["start"] for iv in intervals]
     ends = [iv["end"] for iv in intervals]
     for i in range(1, len(starts)):
-        assert starts[i] > ends[i - 1], f"Intervals must not overlap: start {starts[i]} <= prev end {ends[i-1]}"
+        assert starts[i] > ends[i - 1], (
+            f"Intervals must not overlap: start {starts[i]} <= prev end {ends[i - 1]}"
+        )
 
     # Removed intervals must also have valid start <= end and non-empty text
     for iv in removed:
-        assert iv["start"] <= iv["end"], f"Invalid removed interval: start {iv['start']} > end {iv['end']}"
-        assert len(iv["text"].strip()) > 0, "Removed interval must not be empty or whitespace"
+        assert iv["start"] <= iv["end"], (
+            f"Invalid removed interval: start {iv['start']} > end {iv['end']}"
+        )
+        assert len(iv["text"].strip()) > 0, (
+            "Removed interval must not be empty or whitespace"
+        )
         sliced = DISCHARGE_LETTER[iv["start"] - 1 : iv["end"]]
         assert sliced == iv["text"]
 
@@ -160,4 +246,3 @@ def test_intervals_with_empty_and_whitespace_lines():
         assert len(iv["text"].strip()) > 0
         sliced = text_with_empty_lines[iv["start"] - 1 : iv["end"]]
         assert sliced == iv["text"]
-
