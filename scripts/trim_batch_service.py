@@ -198,22 +198,6 @@ except ImportError:
         )
 
 
-def is_transport_voucher(raw_text: str, rectype: object) -> bool:
-    """Return whether the whole document is a confirmed transport voucher.
-
-    The contract is intentionally narrow: the text must contain the literal,
-    case-sensitive Word form marker and RECTYPE must be exactly ``BT`` or start
-    with ``ORDON``. Missing, blank, non-string, and unrelated RECTYPE values do
-    not qualify and therefore continue to ordinary model inference.
-    """
-
-    return (
-        "FORMCHECKBOX" in raw_text
-        and isinstance(rectype, str)
-        and (rectype == "BT" or rectype.startswith("ORDON"))
-    )
-
-
 def _empty_result(doc_id: object, raw_text: str) -> dict:
     return {
         "id": doc_id,
@@ -226,20 +210,6 @@ def _empty_result(doc_id: object, raw_text: str) -> dict:
         "removed_intervals": [],
     }
 
-
-def _transport_voucher_result(doc_id: object, raw_text: str) -> dict:
-    return {
-        "id": doc_id,
-        "trimmed_text": "",
-        "is_bt": True,
-        "raw_chars": len(raw_text),
-        "trimmed_chars": 0,
-        "reduction_pct": 100.0,
-        "preserved_intervals": [],
-        "removed_intervals": [],
-    }
-
-
 def trim_batch(
     documents: list[dict],
     onnx_dir: str | Path | None = None,
@@ -251,16 +221,12 @@ def trim_batch(
     for index, doc in enumerate(documents):
         doc_id = doc.get("id", "doc")
         raw_text = doc.get("text", "")
-        rectype = doc.get("rectype")
 
         if not raw_text or not raw_text.strip():
             precomputed_results[index] = _empty_result(doc_id, raw_text)
-        elif is_transport_voucher(raw_text, rectype):
-            precomputed_results[index] = _transport_voucher_result(doc_id, raw_text)
 
-    # A batch containing only empty documents and confirmed vouchers does not
-    # need to initialize the model runtime. All other documents follow the
-    # ordinary inference path below.
+    # An entirely empty batch does not need to initialize the model runtime.
+    # Every non-empty document follows the same Student v3 inference path.
     if len(precomputed_results) == len(documents):
         return [precomputed_results[index] for index in range(len(documents))]
 

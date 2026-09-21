@@ -87,7 +87,7 @@ Following weak supervision by an LLM teacher and **100% human-in-the-loop manual
 
 Evaluated across **800 real hospital documents** from `D0840/docs` (65k document warehouse) and `denut.rds` (malnutrition patient cohort):
 * **Total prompt tokens saved**: **~171,600 prompt tokens** (-23.5% to -35.2% net token reduction).
-* **Transport Vouchers (`BT`, `ORDON7`)**: The deployed `rectype-aware-v1` worker removes a whole document only when the text contains the literal `FORMCHECKBOX` marker and `RECTYPE` is exactly `BT` or starts with `ORDON`. All other documents, including clinical letters with checkboxes, continue to Student v3 inference.
+* **Transport Vouchers (`BT`, `ORDON7`)**: Student v3 learned transport-voucher boilerplate from the curated training slice. Vouchers and clinical letters with checkboxes use the same model inference path; there is no deterministic whole-document shortcut.
 * **Interactive Viewer**: [benchmark_viewer.html](file:///artifacts/benchmark_viewer.html) (color-coded side-by-side verification for 50 diverse documents).
 
 ---

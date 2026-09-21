@@ -153,7 +153,7 @@ The release archive contains everything required for standalone, offline inferen
 * **`tokenizer.json`**, **`tokenizer_config.json`**, **`special_tokens_map.json`**: Fast Rust / Hugging Face tokenizer assets.
 * **`config.json`**: Sequence classification architecture metadata.
 * **`artifact.json`**: Manifest declaring `artifact_version` (`1.1.0`) and the contract implemented by the packaged worker (`rectype-aware-v1`).
-* **`trim_batch_service.py`**: High-performance batch inference service invoked by `redsan`. Under `rectype-aware-v1`, it removes a whole document only when the text contains the literal `FORMCHECKBOX` marker and `RECTYPE` is exactly `BT` or starts with `ORDON`; missing, blank, and unrelated types continue to model inference.
+* **`trim_batch_service.py`**: High-performance batch inference service invoked by `redsan`. Every non-empty document follows Student v3 inference; there is no deterministic transport-voucher shortcut or second trimming pipeline.
 
 ### 1. Where to Get `edsan-doc-trimmer-v1.1.0.zip`
 * **Hospital Internal GitLab**: Navigate to **Deploy > Releases** (tag `v1.1.0`) and download the attached asset `edsan-doc-trimmer-v1.1.0.zip`.

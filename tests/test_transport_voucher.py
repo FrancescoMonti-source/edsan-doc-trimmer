@@ -1,9 +1,9 @@
-"""Tests for the worker's rectype-aware-v1 transport-voucher contract.
+"""Tests for transport vouchers and discharge letters under pure model trimming.
 
 These cases assert that:
-1. Whole-document removal requires literal `FORMCHECKBOX` and a transport
-   RECTYPE (`BT` or an `ORDON` prefix).
-2. All other documents continue to ordinary model inference.
+1. Every non-empty document continues to ordinary model inference, regardless
+   of `RECTYPE` or `FORMCHECKBOX` markers.
+2. The worker has no deterministic whole-document transport shortcut.
 3. Coordinates and grounding guarantees are maintained for model output.
 """
 
@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import trim_batch_service as worker
-from trim_batch_service import is_transport_voucher, trim_batch
+from trim_batch_service import trim_batch
 
 # A real bon de transport. All 495 in the corpus are RECTYPE ORDON7.
 VOUCHER = """BT - BON DE TRANSPORT
@@ -120,25 +120,18 @@ def test_discharge_letter_with_different_rectypes():
         assert res["trimmed_chars"] > 0
 
 
-@pytest.mark.parametrize("rectype", ["BT", "ORDON", "ORDON7", "ORDONACTE2"])
-def test_transport_rectype_with_literal_form_marker_is_a_voucher(rectype):
-    assert is_transport_voucher(VOUCHER, rectype)
-
-
-@pytest.mark.parametrize("rectype", [None, "", "   ", "CRH2AB", "BT7", "ordon7", 7])
-def test_missing_blank_or_unrelated_rectype_is_not_a_voucher(rectype):
-    assert not is_transport_voucher(VOUCHER, rectype)
-
-
 @pytest.mark.parametrize(
     "document",
     [
+        {"id": "bt", "text": VOUCHER, "rectype": "BT"},
+        {"id": "ordon", "text": VOUCHER, "rectype": "ORDON7"},
+        {"id": "other_ordon", "text": VOUCHER, "rectype": "ORDONACTE2"},
         {"id": "missing", "text": VOUCHER},
         {"id": "blank", "text": VOUCHER, "rectype": ""},
         {"id": "clinical", "text": VOUCHER, "rectype": "CRH2AB"},
     ],
 )
-def test_unconfirmed_voucher_continues_to_model_inference(document):
+def test_every_nonempty_document_uses_model_inference(document):
     result = trim_batch([document])[0]
 
     assert result["is_bt"] is False
@@ -146,32 +139,6 @@ def test_unconfirmed_voucher_continues_to_model_inference(document):
         line for line in VOUCHER.splitlines() if line.strip()
     )
     assert result["preserved_intervals"]
-
-
-def test_form_marker_inside_clinical_letter_uses_model_inference():
-    assert not is_transport_voucher(DISCHARGE_LETTER, "CRH2AB")
-
-
-def test_transport_rectype_without_literal_form_marker_uses_model_inference():
-    assert not is_transport_voucher("Clinical narrative", "BT")
-    assert not is_transport_voucher("formcheckbox", "ORDON7")
-
-
-@pytest.mark.parametrize("rectype", ["BT", "ORDON7"])
-def test_confirmed_voucher_is_removed_without_loading_a_model(rectype):
-    results = trim_batch([{"id": "v_1", "text": VOUCHER, "rectype": rectype}])
-    assert results == [
-        {
-            "id": "v_1",
-            "trimmed_text": "",
-            "is_bt": True,
-            "raw_chars": len(VOUCHER),
-            "trimmed_chars": 0,
-            "reduction_pct": 100.0,
-            "preserved_intervals": [],
-            "removed_intervals": [],
-        }
-    ]
 
 
 def test_empty_document():
