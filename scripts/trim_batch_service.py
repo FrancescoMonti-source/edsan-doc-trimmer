@@ -10,52 +10,214 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
-import os
 from pathlib import Path
+
+# Ensure repo src/ is in sys.path if running directly from script
+_REPO_SRC = Path(__file__).resolve().parent.parent / "src"
+if _REPO_SRC.exists() and str(_REPO_SRC) not in sys.path:
+    sys.path.insert(0, str(_REPO_SRC))
+
+from dataclasses import dataclass
 
 import numpy as np
 import onnxruntime as ort
-import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+try:
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    HAS_TORCH_TRANSFORMERS = True
+except ImportError:
+    torch = None
+    AutoModelForSequenceClassification = None
+    AutoTokenizer = None
+    HAS_TORCH_TRANSFORMERS = False
 
 try:
     from tokenizers import Tokenizer
     USE_RUST_TOKENIZER = True
 except ImportError:
+    Tokenizer = None
     USE_RUST_TOKENIZER = False
 
-from redsan_doc_trimmer.dataset import build_windowed_samples, extract_lines_with_offsets
+# Resilient imports: use redsan_doc_trimmer package if installed/in path,
+# or fallback to self-contained definitions for standalone unzipped deployment
+try:
+    from redsan_doc_trimmer.dataset import (
+        DocumentSpan,
+        WindowedLineSample,
+        build_windowed_samples,
+        extract_lines_with_offsets,
+    )
+except ImportError:
+    @dataclass(frozen=True)
+    class DocumentSpan:
+        start_char: int
+        end_char: int
+        text: str
+        is_boilerplate: bool = False
+        label_source: str = "unlabeled"
 
-# Hybrid Regex post-cleaners for known stubborn trailing metadata
-POST_BP_PATTERNS = [
-    re.compile(r"^\s*Copie\s+(adressée|transmise)\s+à\b.*$", re.IGNORECASE),
-    re.compile(r"^\s*[A-Z]{2,3}\s*/\s*[A-Z]{2,3}\s*$"),  # Typist initials like MB /SR
-    re.compile(r"^\s*\d+\s*/\s*\d+\s*$"),  # Lone page numbers like 3/8
-]
+    @dataclass(frozen=True)
+    class WindowedLineSample:
+        line_index: int
+        start_char: int
+        end_char: int
+        target_text: str
+        context_before: str
+        context_after: str
+        is_boilerplate: bool = False
+        doc_id: str | None = None
 
+        def to_input_pair(self) -> tuple[str, str]:
+            context = f"{self.context_before} \n {self.context_after}".strip()
+            return self.target_text, context
 
-def is_transport_voucher(text: str) -> bool:
-    """Detects if a document is a transport voucher (BT)."""
-    return bool(re.search(r"^\s*BT\b", text, re.IGNORECASE) or "FORMCHECKBOX" in text)
+    def extract_lines_with_offsets(rectxt: str) -> list[DocumentSpan]:
+        lines: list[DocumentSpan] = []
+        current_offset = 0
+        raw_lines = rectxt.splitlines(keepends=True)
+        for raw_line in raw_lines:
+            start = current_offset
+            end = current_offset + len(raw_line)
+            current_offset = end
+            clean_text = raw_line.rstrip("\r\n")
+            lines.append(
+                DocumentSpan(
+                    start_char=start,
+                    end_char=start + len(clean_text),
+                    text=clean_text,
+                )
+            )
+        return lines
+
+    def build_windowed_samples(
+        spans: list[DocumentSpan],
+        window_size: int = 2,
+        doc_id: str | None = None,
+    ) -> list[WindowedLineSample]:
+        samples: list[WindowedLineSample] = []
+        n = len(spans)
+        for i, span in enumerate(spans):
+            prev_lines = [
+                spans[j].text
+                for j in range(max(0, i - window_size), i)
+                if spans[j].text.strip()
+            ]
+            context_before = " \n ".join(prev_lines)
+            next_lines = [
+                spans[j].text
+                for j in range(i + 1, min(n, i + 1 + window_size))
+                if spans[j].text.strip()
+            ]
+            context_after = " \n ".join(next_lines)
+            samples.append(
+                WindowedLineSample(
+                    line_index=i,
+                    start_char=span.start_char,
+                    end_char=span.end_char,
+                    target_text=span.text,
+                    context_before=context_before,
+                    context_after=context_after,
+                    is_boilerplate=span.is_boilerplate,
+                    doc_id=doc_id,
+                )
+            )
+        return samples
+
+try:
+    from redsan_doc_trimmer.model_resolver import resolve_model_dir
+except ImportError:
+    def resolve_model_dir(candidate_dir: str | Path | None = None) -> Path:
+        if candidate_dir is not None and str(candidate_dir).strip():
+            cand = Path(candidate_dir).expanduser().resolve()
+            if cand.is_file() and cand.name.lower() == "model.onnx":
+                cand = cand.parent
+            if (cand / "model.onnx").is_file():
+                return cand
+            raise FileNotFoundError(f"[ERROR] model.onnx not found in: {cand}")
+
+        for env_var in ("EDSAN_TRIMMER_PATH", "REDSAN_TRIMMER_PATH"):
+            val = os.environ.get(env_var, "").strip()
+            if val:
+                p = Path(val).expanduser().resolve()
+                if p.is_file() and p.name.lower() == "model.onnx":
+                    p = p.parent
+                if (p / "model.onnx").is_file():
+                    return p
+
+        # Check script parent directory
+        script_p = Path(__file__).resolve().parent
+        if (script_p / "model.onnx").is_file():
+            return script_p
+
+        # Check cwd
+        cur = Path.cwd().resolve()
+        if (cur / "model.onnx").is_file():
+            return cur
+
+        repo_cand = cur / "artifacts" / "active_learning" / "onnx_export"
+        if (repo_cand / "model.onnx").is_file():
+            return repo_cand
+
+        # Check standard user cache directories (populated by redsan::edsan_install_trimmer)
+        home = Path.home()
+        cache_cands: list[Path] = []
+        if os.name == "nt":
+            lad = os.environ.get("LOCALAPPDATA")
+            if lad:
+                cache_cands.append(Path(lad) / "R" / "cache" / "R" / "edsan_doc_trimmer" / "v1")
+                cache_cands.append(Path(lad) / "edsan_doc_trimmer" / "v1")
+            cache_cands.append(home / "AppData" / "Local" / "R" / "cache" / "R" / "edsan_doc_trimmer" / "v1")
+            cache_cands.append(home / "AppData" / "Local" / "edsan_doc_trimmer" / "v1")
+        else:
+            xdg = os.environ.get("XDG_CACHE_HOME")
+            if xdg:
+                cache_cands.append(Path(xdg) / "R" / "edsan_doc_trimmer" / "v1")
+                cache_cands.append(Path(xdg) / "edsan_doc_trimmer" / "v1")
+            cache_cands.append(home / ".cache" / "R" / "edsan_doc_trimmer" / "v1")
+            cache_cands.append(home / ".cache" / "edsan_doc_trimmer" / "v1")
+
+        for c in cache_cands:
+            if (c / "model.onnx").is_file():
+                return c
+
+        raise FileNotFoundError(
+            "================================================================================\n"
+            "[ERROR] edsan-doc-trimmer model not found!\n"
+            "================================================================================\n"
+            "The model file 'model.onnx' could not be located.\n"
+            "HOW TO FIX:\n"
+            "  1. Set the EDSAN_TRIMMER_PATH environment variable to the model folder:\n"
+            "     export EDSAN_TRIMMER_PATH=/path/to/extracted_model\n"
+            "  2. Or specify --onnx_dir /path/to/extracted_model\n"
+            "================================================================================"
+        )
+
 
 
 def trim_batch(
     documents: list[dict],
-    onnx_dir: str = "artifacts/active_learning/onnx_export",
+    onnx_dir: str | Path | None = None,
     threshold: float = 0.50,
-    apply_hybrid_rules: bool = True,
+    apply_hybrid_rules: bool = False,
     batch_size: int = 128,
 ) -> list[dict]:
-    dir_path = Path(onnx_dir)
+    dir_path = resolve_model_dir(onnx_dir)
     safetensors_path = dir_path / "model.safetensors"
-    use_cuda = torch.cuda.is_available() and safetensors_path.exists()
+    use_cuda = (
+        HAS_TORCH_TRANSFORMERS
+        and torch is not None
+        and torch.cuda.is_available()
+        and safetensors_path.exists()
+    )
 
     if use_cuda:
         device = torch.device("cuda")
-        tokenizer = AutoTokenizer.from_pretrained(onnx_dir)
-        model = AutoModelForSequenceClassification.from_pretrained(onnx_dir).to(device)
+        tokenizer = AutoTokenizer.from_pretrained(str(dir_path))
+        model = AutoModelForSequenceClassification.from_pretrained(str(dir_path)).to(device)
         model.eval()
         rust_tok = False
     else:
@@ -68,20 +230,30 @@ def trim_batch(
         session = ort.InferenceSession(onnx_path, sess_opts, providers=["CPUExecutionProvider"])
 
         tok_json = dir_path / "tokenizer.json"
-        if USE_RUST_TOKENIZER and tok_json.exists():
+        if USE_RUST_TOKENIZER and Tokenizer is not None and tok_json.exists():
             tokenizer = Tokenizer.from_file(str(tok_json))
             tokenizer.enable_padding(length=128, pad_id=1, pad_token="<pad>")
             tokenizer.enable_truncation(max_length=128)
             rust_tok = True
-        else:
-            tokenizer = AutoTokenizer.from_pretrained(onnx_dir)
+        elif AutoTokenizer is not None:
+            tokenizer = AutoTokenizer.from_pretrained(str(dir_path))
             rust_tok = False
+        else:
+            raise RuntimeError(
+                "Neither 'tokenizers' nor 'transformers' is installed. "
+                "Please run: pip install tokenizers"
+            )
+
 
     results = []
 
     for doc in documents:
         doc_id = doc.get("id", "doc")
         raw_text = doc.get("text", "")
+        # `redsan` sends this beside `id` and `text` and always has. A caller
+        # that omits it gets no voucher fast path at all, which is the safe
+        # direction: every document reaches the model and keeps its text.
+        rectype = doc.get("rectype", "")
 
         # Check for empty or transport voucher
         if not raw_text or not raw_text.strip():
@@ -94,20 +266,6 @@ def trim_batch(
                 "reduction_pct": 100.0 if raw_text else 0.0,
                 "preserved_intervals": [],
                 "removed_intervals": [],
-            })
-            continue
-
-        if apply_hybrid_rules and is_transport_voucher(raw_text):
-            # Flagged as BT: Entire document is administrative transport form
-            results.append({
-                "id": doc_id,
-                "trimmed_text": "",
-                "is_bt": True,
-                "raw_chars": len(raw_text),
-                "trimmed_chars": 0,
-                "reduction_pct": 100.0,
-                "preserved_intervals": [],
-                "removed_intervals": [{"start": 1, "end": len(raw_text), "family": "transport_voucher"}],
             })
             continue
 
@@ -166,21 +324,15 @@ def trim_batch(
                     if p_bp > threshold:
                         line_is_bp[s.line_index] = True
 
-        # Hybrid post-cleaner for trailing stubborn lines
-        if apply_hybrid_rules:
-            for i, span in enumerate(spans):
-                if not line_is_bp[i]:
-                    for pat in POST_BP_PATTERNS:
-                        if pat.search(span.text):
-                            line_is_bp[i] = True
-                            break
-
         # Reconstruct preserved and removed intervals (1-indexed for R!)
         preserved_intervals = []
         removed_intervals = []
         clinical_chunks = []
 
         for i, span in enumerate(spans):
+            if not span.text.strip():
+                continue
+
             # Convert 0-indexed [start_char, end_char) to 1-indexed inclusive [start, end] for R
             r_start = span.start_char + 1
             r_end = span.end_char
@@ -224,10 +376,22 @@ def main():
     parser = argparse.ArgumentParser(description="Batch document trimming service")
     parser.add_argument("--input", "-i", type=str, help="Input JSON file path (or '-' for stdin)")
     parser.add_argument("--output", "-o", type=str, help="Output JSON file path (or '-' for stdout)")
-    parser.add_argument("--onnx_dir", type=str, default="artifacts/active_learning/onnx_export")
+    parser.add_argument(
+        "--onnx_dir",
+        type=str,
+        default=None,
+        help="Directory containing model.onnx (default: auto-resolved from EDSAN_TRIMMER_PATH, user cache, or repo artifacts)",
+    )
     parser.add_argument("--threshold", type=float, default=0.50)
     parser.add_argument("--no_hybrid", action="store_true", help="Disable hybrid regex pre/post rules")
     args = parser.parse_args()
+
+    # Pre-flight resolution of model directory
+    try:
+        resolved_dir = resolve_model_dir(args.onnx_dir)
+    except FileNotFoundError as err:
+        sys.stderr.write(str(err) + "\n")
+        sys.exit(1)
 
     # Read input
     if not args.input or args.input == "-":
@@ -242,7 +406,7 @@ def main():
     # Process
     results = trim_batch(
         documents=payload,
-        onnx_dir=args.onnx_dir,
+        onnx_dir=resolved_dir,
         threshold=args.threshold,
         apply_hybrid_rules=not args.no_hybrid,
     )

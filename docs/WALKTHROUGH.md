@@ -64,7 +64,7 @@ python scripts/run_active_learning.py --seed_size 1000 --mine_top_k 500
 
 ### Running Automated Verification Tests Anytime
 ```powershell
-.venv\Scripts\pytest -v
+.venv\Scripts\python -m pytest -v
 ```
 
 ---
@@ -87,9 +87,7 @@ Following weak supervision by an LLM teacher and **100% human-in-the-loop manual
 
 Evaluated across **800 real hospital documents** from `D0840/docs` (65k document warehouse) and `denut.rds` (malnutrition patient cohort):
 * **Total prompt tokens saved**: **~171,600 prompt tokens** (-23.5% to -35.2% net token reduction).
-* **Prescriptions (`ORDON*`)**: Preserves all drug molecules, posologies, medical equipment, and nursing orders while stripping hospital letterheads and legal disclaimers (~35% reduction).
-* **Transport Vouchers (`BT`)**: Automatically detected and bypassed via fast regex pre-filter (`is_transport_voucher`).
-* **Hospitalization & Discharge (`CRH*`, `CR2AAF`)**: All anamnesis, conclusions, and diagnoses preserved verbatim.
+* **Transport Vouchers (`BT`, `ORDON7`)**: Evaluated directly by Student v3 DrBERT. All deterministic rules and shadow pipelines (`is_transport_voucher`, `POST_BP_PATTERNS`) were eliminated in favor of training signal. Vouchers have administrative checkboxes and form boilerplate stripped by the model, while clinical discharge letters (`CRH2AB`, `LDL2024`) containing tick-boxes preserve 100% of clinical narrative, weights, and conclusions.
 * **Interactive Viewer**: [benchmark_viewer.html](file:///artifacts/benchmark_viewer.html) (color-coded side-by-side verification for 50 diverse documents).
 
 ---
@@ -109,7 +107,64 @@ trimmed_doceds <- trim_doceds_onnx(bundle$sources$doceds)
 # substring(raw_rectxt, start, end) == preserved_text (100% auditable)
 ```
 
-Run the complete R integration test anytime:
-```powershell
-Rscript scripts/redsan_trim_demo.R
+The R entry point is `redsan::trim_doceds_onnx()`. There is no second one in
+this repository: `scripts/redsan_trim_demo.R` was removed on 2026-09-21 because
+it built its own payload with `id` and `text` and no `rectype`, which is a
+different worker contract from the one `redsan` sends, and it is how a corpus
+came to be trimmed under a rule production never used.
+
+---
+
+## 6. Hospital Deployment & Air-Gapped HDW Setup
+
+On hospital Health Data Warehouse (HDW) platforms, machines are strictly air-gapped without access to public Hugging Face hubs or GitHub.
+
+### 6.1 Artifact Packaging
+The production model artifact is packaged as `edsan-doc-trimmer-v1.1.0.zip`, containing:
+* `model.onnx`: Standalone DrBERT ONNX runtime graph for CPU inference (442.7 MB)
+* `model.safetensors`: PyTorch model weights enabling CUDA GPU acceleration (442.5 MB)
+* `tokenizer.json`, `tokenizer_config.json`, `special_tokens_map.json`: Fast Rust tokenizer assets
+* `config.json`: Sequence classification architecture metadata
+* `artifact.json`: Metadata manifest (`v1.1.0`, `rectype-aware-v1`)
+* `trim_batch_service.py`: High-performance batch inference worker
+
+### 6.2 Distributing via Internal GitLab
+Follow the step-by-step maintainer instructions in **[docs/GITLAB_RELEASE_GUIDE.md](GITLAB_RELEASE_GUIDE.md)** to:
+1. Create a tag (`v1.1.0`) and release under **Deploy > Releases**.
+2. Upload the release zip to the **GitLab Generic Package Registry** via curl.
+3. Link the package URL to the release without bloating Git history.
+
+### 6.3 Deployment for R Users (`redsan`)
+```r
+library(redsan)
+
+# Option A: One-time install to user cache from downloaded zip:
+edsan_install_trimmer("/path/to/edsan-doc-trimmer-v1.1.0.zip")
+
+# Option B: Or point directly to a shared HDW cluster folder:
+Sys.setenv(EDSAN_TRIMMER_PATH = "/data/shared/models/edsan-doc-trimmer/v1.1.0")
+
+# Python Path (if running in a custom virtual environment):
+Sys.setenv(REDSAN_PYTHON_PATH = "/path/to/python")
+
+# Run trimming:
+trimmed_bundle <- trim_doceds_onnx(bundle)
+```
+
+### 6.4 Deployment for Python Users
+```bash
+# Option 1: Unpack in repo artifacts folder
+# On Linux / macOS:
+unzip edsan-doc-trimmer-v1.1.0.zip -d artifacts/active_learning/onnx_export
+# On Windows PowerShell:
+Expand-Archive -Path edsan-doc-trimmer-v1.1.0.zip -DestinationPath artifacts/active_learning/onnx_export -Force
+
+# Option 2: Set environment variable pointing to pre-extracted folder
+export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/v1.1.0"
+# In PowerShell:
+# $env:EDSAN_TRIMMER_PATH = "C:\models\edsan-doc-trimmer\v1.1.0"
+
+# Auto-resolves and executes:
+python scripts/trim_document.py
+python scripts/trim_batch_service.py -i input.json -o output.json
 ```

@@ -133,18 +133,119 @@ uv pip install -e ".[dev]"
 ### Running Tests
 
 ```bash
-pytest -v
+python -m pytest -v
 ```
 
-### Upstream Integration in R (`redsan`)
+---
 
-The trained ONNX artifact is packaged as a release zip (`edsan-doc-trimmer-v1.0.0.zip`) and called directly from R:
+## Setup in Hospital / Air-Gapped HDW Environments
+
+### Why Doesn't `git clone` Include the Model?
+The production DrBERT ONNX model (`model.onnx`), CUDA weights (`model.safetensors`), and tokenizer assets are **gitignored** (`artifacts/` in `.gitignore`).
+Committing multi-hundred-megabyte binaries directly to Git would bloat repository history permanently, drastically slow down cloning and branching across hospital networks, and exceed enterprise GitLab push size limits.
+
+Instead, the model is packaged as a standalone release archive: **`edsan-doc-trimmer-v1.1.0.zip`**.
+
+### Archive Contents
+The release archive contains everything required for standalone, offline inference with zero internet access:
+* **`model.onnx`** (442.7 MB): Standalone DrBERT ONNX runtime graph for CPU inference (runs via `onnxruntime` and `tokenizers` without PyTorch).
+* **`model.safetensors`** (442.5 MB): PyTorch model weights enabling CUDA GPU acceleration when PyTorch and an NVIDIA GPU are available.
+* **`tokenizer.json`**, **`tokenizer_config.json`**, **`special_tokens_map.json`**: Fast Rust / Hugging Face tokenizer assets.
+* **`config.json`**: Sequence classification architecture metadata.
+* **`artifact.json`**: Manifest declaring `artifact_version` (`1.1.0`) and `worker_contract` (`rectype-aware-v1`).
+* **`trim_batch_service.py`**: High-performance batch inference service invoked by `redsan`.
+
+### 1. Where to Get `edsan-doc-trimmer-v1.1.0.zip`
+* **Hospital Internal GitLab**: Navigate to **Deploy > Releases** (tag `v1.1.0`) and download the attached asset `edsan-doc-trimmer-v1.1.0.zip`.
+* **Shared HDW Server Drive**: Pre-extracted or stored under `/data/shared/models/edsan-doc-trimmer/`.
+* *Maintainers*: See **[docs/GITLAB_RELEASE_GUIDE.md](docs/GITLAB_RELEASE_GUIDE.md)** for step-by-step instructions on creating the release and uploading the binary asset via the GitLab Generic Package Registry.
+
+### 2. Step-by-Step for R Users (`redsan`)
+In R, install the model directly using `redsan`:
 
 ```r
 library(redsan)
 
-# Automatically runs background batch inference via ONNX Runtime
-trimmed_doceds <- trim_doceds_onnx(bundle$sources$doceds)
+# Option A: One-time install from zip into persistent user cache
+edsan_install_trimmer("C:/path/to/edsan-doc-trimmer-v1.1.0.zip")
+# On Linux HDW: edsan_install_trimmer("/path/to/edsan-doc-trimmer-v1.1.0.zip")
+
+# Option B: Point directly to a pre-extracted or shared HDW directory:
+Sys.setenv(EDSAN_TRIMMER_PATH = "/data/shared/models/edsan-doc-trimmer/v1.1.0")
+
+# Python Environment Configuration:
+# redsan automatically detects virtual environments in edsan-doc-trimmer or system Python.
+# If Python is in a custom location, specify REDSAN_PYTHON_PATH:
+Sys.setenv(REDSAN_PYTHON_PATH = "C:/path/to/venv/Scripts/python.exe")
+# On Linux HDW:
+# Sys.setenv(REDSAN_PYTHON_PATH = "/path/to/venv/bin/python")
+# Or permanently in ~/.Renviron:
+# REDSAN_PYTHON_PATH=C:/path/to/venv/Scripts/python.exe (or /path/to/venv/bin/python)
+
+# Verify it works immediately:
+clean_text <- trim_doceds_onnx("Consultation du 12/03/2024. Patient vu pour fievre.")
+cat(clean_text)
+
+# Batch trim a clinical cohort bundle:
+trimmed_bundle <- trim_doceds_onnx(bundle)
 ```
 
+### 3. Step-by-Step for Python Users
+Colleagues running standalone Python scripts (`scripts/trim_batch_service.py` or `scripts/trim_document.py`) have two options:
+
+#### Option A: Extract directly into the repository
+```bash
+# Linux / macOS:
+unzip edsan-doc-trimmer-v1.1.0.zip -d artifacts/active_learning/onnx_export
+
+# Windows PowerShell:
+Expand-Archive -Path edsan-doc-trimmer-v1.1.0.zip -DestinationPath artifacts/active_learning/onnx_export -Force
+```
+The scripts automatically detect models located in `artifacts/active_learning/onnx_export`.
+
+#### Option B: Extract to custom folder and set `EDSAN_TRIMMER_PATH`
+```bash
+# Linux / macOS:
+unzip edsan-doc-trimmer-v1.1.0.zip -d /data/shared/models/edsan-doc-trimmer/v1.1.0
+export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/v1.1.0"
+
+# Windows PowerShell:
+Expand-Archive -Path edsan-doc-trimmer-v1.1.0.zip -DestinationPath "C:\models\edsan-doc-trimmer\v1.1.0" -Force
+$env:EDSAN_TRIMMER_PATH = "C:\models\edsan-doc-trimmer\v1.1.0"
+```
+
+Then run scripts without specifying paths:
+```bash
+# Test on a sample document
+python scripts/trim_document.py
+
+# Run batch worker
+python scripts/trim_batch_service.py --input batch_docs.json --output trimmed_docs.json
+```
+
+### 4. Multi-User Shared Folder Setup on HDW Servers
+To avoid duplicating large models for every data scientist on a shared server, administrators can configure a single shared model instance:
+
+1. **Extract once to a shared location**:
+   ```bash
+   mkdir -p /data/shared/models/edsan-doc-trimmer/v1.1.0
+   unzip edsan-doc-trimmer-v1.1.0.zip -d /data/shared/models/edsan-doc-trimmer/v1.1.0/
+   chmod -R a+rX /data/shared/models/edsan-doc-trimmer/
+   ```
+
+2. **Configure environment variables for all users**:
+   * In `/etc/environment` or `/etc/profile.d/edsan.sh`:
+     ```bash
+     export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/v1.1.0"
+     ```
+   * Or in users' `~/.Renviron`:
+     ```
+     EDSAN_TRIMMER_PATH=/data/shared/models/edsan-doc-trimmer/v1.1.0
+     ```
+
+Both R (`redsan`) and Python (`trim_batch_service.py`, `trim_document.py`) will automatically discover and load the shared model!
+
+---
+
 For detailed pipeline reproduction and active learning commands, see **[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md)**.
+For hospital GitLab release setup and binary hosting, see **[docs/GITLAB_RELEASE_GUIDE.md](docs/GITLAB_RELEASE_GUIDE.md)**.
