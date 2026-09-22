@@ -2,7 +2,7 @@
 """Batch document trimming service for redsan R integration.
 
 Accepts JSON input from a file or stdin containing a list of {id, text},
-runs batched DrBERT ONNX inference (with hybrid pre/post rules),
+runs batched DrBERT ONNX inference,
 and outputs JSON with trimmed text and exact [start_char, end_char] intervals.
 """
 
@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -24,6 +23,8 @@ from dataclasses import dataclass
 
 import numpy as np
 import onnxruntime as ort
+
+WORKER_CONTRACT = "model-only-v1"
 
 try:
     import torch
@@ -197,14 +198,36 @@ except ImportError:
         )
 
 
+def _empty_result(doc_id: object, raw_text: str) -> dict:
+    return {
+        "id": doc_id,
+        "trimmed_text": "",
+        "raw_chars": len(raw_text),
+        "trimmed_chars": 0,
+        "reduction_pct": 100.0 if raw_text else 0.0,
+        "preserved_intervals": [],
+        "removed_intervals": [],
+    }
 
 def trim_batch(
     documents: list[dict],
     onnx_dir: str | Path | None = None,
     threshold: float = 0.50,
-    apply_hybrid_rules: bool = False,
     batch_size: int = 128,
 ) -> list[dict]:
+    precomputed_results: dict[int, dict] = {}
+    for index, doc in enumerate(documents):
+        doc_id = doc.get("id", "doc")
+        raw_text = doc.get("text", "")
+
+        if not raw_text or not raw_text.strip():
+            precomputed_results[index] = _empty_result(doc_id, raw_text)
+
+    # An entirely empty batch does not need to initialize the model runtime.
+    # Every non-empty document follows the same Student v3 inference path.
+    if len(precomputed_results) == len(documents):
+        return [precomputed_results[index] for index in range(len(documents))]
+
     dir_path = resolve_model_dir(onnx_dir)
     safetensors_path = dir_path / "model.safetensors"
     use_cuda = (
@@ -244,30 +267,15 @@ def trim_batch(
                 "Please run: pip install tokenizers"
             )
 
-
     results = []
 
-    for doc in documents:
+    for index, doc in enumerate(documents):
+        if index in precomputed_results:
+            results.append(precomputed_results[index])
+            continue
+
         doc_id = doc.get("id", "doc")
         raw_text = doc.get("text", "")
-        # `redsan` sends this beside `id` and `text` and always has. A caller
-        # that omits it gets no voucher fast path at all, which is the safe
-        # direction: every document reaches the model and keeps its text.
-        rectype = doc.get("rectype", "")
-
-        # Check for empty or transport voucher
-        if not raw_text or not raw_text.strip():
-            results.append({
-                "id": doc_id,
-                "trimmed_text": "",
-                "is_bt": False,
-                "raw_chars": len(raw_text),
-                "trimmed_chars": 0,
-                "reduction_pct": 100.0 if raw_text else 0.0,
-                "preserved_intervals": [],
-                "removed_intervals": [],
-            })
-            continue
 
         spans = extract_lines_with_offsets(raw_text)
         samples = build_windowed_samples(spans, window_size=2)
@@ -361,7 +369,6 @@ def trim_batch(
         results.append({
             "id": doc_id,
             "trimmed_text": trimmed_text,
-            "is_bt": False,
             "raw_chars": raw_len,
             "trimmed_chars": trim_len,
             "reduction_pct": round(reduction, 2),
@@ -383,7 +390,6 @@ def main():
         help="Directory containing model.onnx (default: auto-resolved from EDSAN_TRIMMER_PATH, user cache, or repo artifacts)",
     )
     parser.add_argument("--threshold", type=float, default=0.50)
-    parser.add_argument("--no_hybrid", action="store_true", help="Disable hybrid regex pre/post rules")
     args = parser.parse_args()
 
     # Pre-flight resolution of model directory
@@ -408,7 +414,6 @@ def main():
         documents=payload,
         onnx_dir=resolved_dir,
         threshold=args.threshold,
-        apply_hybrid_rules=not args.no_hybrid,
     )
 
     # Output
@@ -423,4 +428,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

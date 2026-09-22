@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Packages a compliant edsan-doc-trimmer release archive with artifact.json (v1.1.0)."""
+"""Packages a compliant edsan-doc-trimmer release archive with artifact.json."""
 
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import shutil
 import zipfile
@@ -12,24 +13,47 @@ from pathlib import Path
 from redsan_doc_trimmer.model_resolver import get_user_cache_dirs
 
 
+def read_worker_contract(worker_path: Path) -> str:
+    """Read the literal WORKER_CONTRACT implemented by the packaged worker."""
+
+    module = ast.parse(
+        worker_path.read_text(encoding="utf-8"), filename=str(worker_path)
+    )
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "WORKER_CONTRACT"
+            for target in node.targets
+        ):
+            continue
+        value = ast.literal_eval(node.value)
+        if isinstance(value, str) and value:
+            return value
+        break
+    raise ValueError(
+        f"Worker does not declare a literal WORKER_CONTRACT: {worker_path}"
+    )
+
+
 def package_artifact(
     onnx_dir: str = "artifacts/active_learning/onnx_export",
     worker_script: str = "scripts/trim_batch_service.py",
-    output_zip: str = "artifacts/edsan-doc-trimmer-v1.1.0.zip",
-    version: str = "1.1.0",
-    contract: str = "rectype-aware-v1",
+    output_zip: str = "artifacts/edsan-doc-trimmer-v1.2.0.zip",
+    version: str = "1.2.0",
     install_to_cache: bool = True,
 ):
     model_path = Path(onnx_dir).resolve()
     worker_path = Path(worker_script).resolve()
     out_zip_path = Path(output_zip).resolve()
     out_zip_path.parent.mkdir(parents=True, exist_ok=True)
+    worker_contract = read_worker_contract(worker_path)
 
     # 1. Create artifact.json
     manifest = {
         "artifact_name": "edsan-doc-trimmer",
         "artifact_version": version,
-        "worker_contract": contract,
+        "worker_contract": worker_contract,
         "model_type": "DrBERT-sequence-classification",
         "exported_at": "2026-09-21",
     }
@@ -86,8 +110,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Package compliant trimmer release archive")
     parser.add_argument("--onnx_dir", type=str, default="artifacts/active_learning/onnx_export")
     parser.add_argument("--worker", type=str, default="scripts/trim_batch_service.py")
-    parser.add_argument("--output", type=str, default="artifacts/edsan-doc-trimmer-v1.1.0.zip")
-    parser.add_argument("--version", type=str, default="1.1.0")
+    parser.add_argument("--output", type=str, default="artifacts/edsan-doc-trimmer-v1.2.0.zip")
+    parser.add_argument("--version", type=str, default="1.2.0")
     parser.add_argument("--no_cache_install", action="store_true")
     args = parser.parse_args()
 

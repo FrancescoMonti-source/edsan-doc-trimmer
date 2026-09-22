@@ -70,8 +70,8 @@ WHY THIS HAPPENS:
 
 HOW TO RESOLVE (Offline / Air-Gapped Hospital HDW Setup):
 
-1. Obtain 'edsan-doc-trimmer-v1.1.0.zip':
-   - From hospital internal GitLab: Project Overview or Deploy > Releases (tag v1.1.0)
+1. Obtain 'edsan-doc-trimmer-v1.2.0.zip':
+   - From hospital internal GitLab: Project Overview or Deploy > Releases (tag v1.2.0)
    - Or from your internal HDW shared model storage (e.g. /data/shared/models/)
    - Or copy from your internet-connected workstation via USB/SFTP.
 
@@ -79,14 +79,14 @@ HOW TO RESOLVE (Offline / Air-Gapped Hospital HDW Setup):
    Option A (Inside this repository):
      Extract directly into the artifacts folder:
        # Linux / macOS:
-       unzip edsan-doc-trimmer-v1.1.0.zip -d artifacts/active_learning/onnx_export
+       unzip edsan-doc-trimmer-v1.2.0.zip -d artifacts/active_learning/onnx_export
        # Windows PowerShell:
-       Expand-Archive -Path edsan-doc-trimmer-v1.1.0.zip -DestinationPath artifacts/active_learning/onnx_export -Force
+       Expand-Archive -Path edsan-doc-trimmer-v1.2.0.zip -DestinationPath artifacts/active_learning/onnx_export -Force
 
    Option B (Shared HDW folder or custom directory):
-     Extract anywhere (e.g. /data/shared/models/edsan-doc-trimmer/v1.1.0)
+     Extract anywhere (e.g. /data/shared/models/edsan-doc-trimmer/v1.2.0)
      and set the EDSAN_TRIMMER_PATH environment variable:
-       export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/v1.1.0"
+       export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/v1.2.0"
        # Or in Windows PowerShell:
        $env:EDSAN_TRIMMER_PATH = "C:\\path\\to\\extracted_folder"
 
@@ -97,7 +97,7 @@ HOW TO RESOLVE (Offline / Air-Gapped Hospital HDW Setup):
 
 3. If running from R (redsan):
      library(redsan)
-     edsan_install_trimmer("path/to/edsan-doc-trimmer-v1.1.0.zip")
+     edsan_install_trimmer("path/to/edsan-doc-trimmer-v1.2.0.zip")
      # If Python executable is in a custom environment:
      Sys.setenv(REDSAN_PYTHON_PATH = "path/to/python")
 {sep}
