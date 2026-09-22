@@ -24,8 +24,8 @@ from test_transport_voucher import DISCHARGE_LETTER, VOUCHER
 from trim_batch_service import trim_batch
 
 DOCS = [
-    {"id": "doc_discharge", "text": DISCHARGE_LETTER, "rectype": "CRH2AB"},
-    {"id": "doc_voucher", "text": VOUCHER, "rectype": "ORDON7"},
+    {"id": "doc_discharge", "text": DISCHARGE_LETTER},
+    {"id": "doc_voucher", "text": VOUCHER},
 ]
 
 def test_in_process_python():
@@ -80,7 +80,7 @@ docs_json <- read_json("{str(input_file).replace(chr(92), '/')}", simplifyVector
 docs_df <- data.frame(
   id = docs_json$id,
   RECTXT = docs_json$text,
-  RECTYPE = docs_json$rectype,
+  RECTYPE = c("CRH2AB", "ORDON7"),
   stringsAsFactors = FALSE
 )
 

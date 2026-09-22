@@ -1,8 +1,7 @@
 """Tests for transport vouchers and discharge letters under pure model trimming.
 
 These cases assert that:
-1. Every non-empty document continues to ordinary model inference, regardless
-   of `RECTYPE` or `FORMCHECKBOX` markers.
+1. Every non-empty document continues to ordinary model inference.
 2. The worker has no deterministic whole-document transport shortcut.
 3. Coordinates and grounding guarantees are maintained for model output.
 """
@@ -88,7 +87,7 @@ def ordinary_model_runtime(monkeypatch, tmp_path):
 
 def test_discharge_letter_preserves_clinical_facts():
     """Discharge letters must never be blanked and must keep all clinical facts verbatim."""
-    docs = [{"id": "letter_1", "text": DISCHARGE_LETTER, "rectype": "CRH2AB"}]
+    docs = [{"id": "letter_1", "text": DISCHARGE_LETTER}]
     results = trim_batch(docs)
     assert len(results) == 1
     res = results[0]
@@ -107,11 +106,11 @@ def test_discharge_letter_preserves_clinical_facts():
     assert res["reduction_pct"] < 50.0
 
 
-def test_discharge_letter_with_different_rectypes():
-    """Discharge letters under any clinical rectype (CRH2AB, LDL2024) retain clinical facts."""
+def test_discharge_letter_batch_preserves_clinical_facts():
+    """Batched discharge letters retain their clinical facts."""
     docs = [
-        {"id": "crh", "text": DISCHARGE_LETTER, "rectype": "CRH2AB"},
-        {"id": "ldl", "text": DISCHARGE_LETTER, "rectype": "LDL2024"},
+        {"id": "first", "text": DISCHARGE_LETTER},
+        {"id": "second", "text": DISCHARGE_LETTER},
     ]
     results = trim_batch(docs)
     for res in results:
@@ -121,20 +120,17 @@ def test_discharge_letter_with_different_rectypes():
 
 
 @pytest.mark.parametrize(
-    "document",
+    "document_id",
     [
-        {"id": "bt", "text": VOUCHER, "rectype": "BT"},
-        {"id": "ordon", "text": VOUCHER, "rectype": "ORDON7"},
-        {"id": "other_ordon", "text": VOUCHER, "rectype": "ORDONACTE2"},
-        {"id": "missing", "text": VOUCHER},
-        {"id": "blank", "text": VOUCHER, "rectype": ""},
-        {"id": "clinical", "text": VOUCHER, "rectype": "CRH2AB"},
+        "first",
+        "second",
     ],
 )
-def test_every_nonempty_document_uses_model_inference(document):
+def test_every_nonempty_document_uses_model_inference(document_id):
+    document = {"id": document_id, "text": VOUCHER}
     result = trim_batch([document])[0]
 
-    assert result["is_bt"] is False
+    assert "is_bt" not in result
     assert result["trimmed_text"] == "\n".join(
         line for line in VOUCHER.splitlines() if line.strip()
     )
@@ -143,18 +139,18 @@ def test_every_nonempty_document_uses_model_inference(document):
 
 def test_empty_document():
     """An empty document returns safely without error."""
-    docs = [{"id": "empty", "text": "", "rectype": "ORDON7"}]
+    docs = [{"id": "empty", "text": ""}]
     results = trim_batch(docs)
     assert len(results) == 1
     assert results[0]["trimmed_text"] == ""
-    assert results[0]["is_bt"] is False
+    assert "is_bt" not in results[0]
     assert results[0]["trimmed_chars"] == 0
     assert results[0]["preserved_intervals"] == []
 
 
 def test_coordinates_and_grounding_guarantee():
     """Every preserved interval in 1-indexed [start, end] must exactly match the source text slice."""
-    docs = [{"id": "letter_1", "text": DISCHARGE_LETTER, "rectype": "CRH2AB"}]
+    docs = [{"id": "letter_1", "text": DISCHARGE_LETTER}]
     results = trim_batch(docs)
     intervals = results[0]["preserved_intervals"]
     removed = results[0]["removed_intervals"]
@@ -198,7 +194,7 @@ def test_intervals_with_empty_and_whitespace_lines():
         "   \n\t\n"
         "Deuxieme paragraphe clinique avec constantes : Poids 70 kg.\n\n\n"
     )
-    docs = [{"id": "multi_empty", "text": text_with_empty_lines, "rectype": "CRH2AB"}]
+    docs = [{"id": "multi_empty", "text": text_with_empty_lines}]
     results = trim_batch(docs)
     res = results[0]
 

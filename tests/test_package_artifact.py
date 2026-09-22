@@ -40,15 +40,15 @@ def test_package_contains_tested_worker_bytes_and_declared_contract(tmp_path):
     assert (model_dir / "trim_batch_service.py").read_bytes() == expected_worker
 
     manifest = json.loads((model_dir / "artifact.json").read_text(encoding="utf-8"))
-    assert manifest["worker_contract"] == "rectype-aware-v1"
+    assert manifest["artifact_version"] == "1.2.0"
+    assert manifest["worker_contract"] == "model-only-v1"
     assert manifest["worker_contract"] == read_worker_contract(tested_worker)
 
     with zipfile.ZipFile(archive) as packaged:
         assert packaged.read("trim_batch_service.py") == expected_worker
-        assert (
-            json.loads(packaged.read("artifact.json"))["worker_contract"]
-            == "rectype-aware-v1"
-        )
+        packaged_manifest = json.loads(packaged.read("artifact.json"))
+        assert packaged_manifest["artifact_version"] == "1.2.0"
+        assert packaged_manifest["worker_contract"] == "model-only-v1"
 
 
 def test_packaging_rejects_worker_without_declared_contract(tmp_path):

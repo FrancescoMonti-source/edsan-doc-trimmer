@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Batch document trimming service for redsan R integration.
 
-Accepts JSON input from a file or stdin containing a list of {id, text, rectype},
+Accepts JSON input from a file or stdin containing a list of {id, text},
 runs batched DrBERT ONNX inference,
 and outputs JSON with trimmed text and exact [start_char, end_char] intervals.
 """
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import numpy as np
 import onnxruntime as ort
 
-WORKER_CONTRACT = "rectype-aware-v1"
+WORKER_CONTRACT = "model-only-v1"
 
 try:
     import torch
@@ -202,7 +202,6 @@ def _empty_result(doc_id: object, raw_text: str) -> dict:
     return {
         "id": doc_id,
         "trimmed_text": "",
-        "is_bt": False,
         "raw_chars": len(raw_text),
         "trimmed_chars": 0,
         "reduction_pct": 100.0 if raw_text else 0.0,
@@ -371,7 +370,6 @@ def trim_batch(
         results.append({
             "id": doc_id,
             "trimmed_text": trimmed_text,
-            "is_bt": False,
             "raw_chars": raw_len,
             "trimmed_chars": trim_len,
             "reduction_pct": round(reduction, 2),

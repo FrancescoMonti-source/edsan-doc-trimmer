@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Packages a compliant edsan-doc-trimmer release archive with artifact.json (v1.1.0)."""
+"""Packages a compliant edsan-doc-trimmer release archive with artifact.json."""
 
 from __future__ import annotations
 
@@ -39,8 +39,8 @@ def read_worker_contract(worker_path: Path) -> str:
 def package_artifact(
     onnx_dir: str = "artifacts/active_learning/onnx_export",
     worker_script: str = "scripts/trim_batch_service.py",
-    output_zip: str = "artifacts/edsan-doc-trimmer-v1.1.0.zip",
-    version: str = "1.1.0",
+    output_zip: str = "artifacts/edsan-doc-trimmer-v1.2.0.zip",
+    version: str = "1.2.0",
     install_to_cache: bool = True,
 ):
     model_path = Path(onnx_dir).resolve()
@@ -110,8 +110,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Package compliant trimmer release archive")
     parser.add_argument("--onnx_dir", type=str, default="artifacts/active_learning/onnx_export")
     parser.add_argument("--worker", type=str, default="scripts/trim_batch_service.py")
-    parser.add_argument("--output", type=str, default="artifacts/edsan-doc-trimmer-v1.1.0.zip")
-    parser.add_argument("--version", type=str, default="1.1.0")
+    parser.add_argument("--output", type=str, default="artifacts/edsan-doc-trimmer-v1.2.0.zip")
+    parser.add_argument("--version", type=str, default="1.2.0")
     parser.add_argument("--no_cache_install", action="store_true")
     args = parser.parse_args()
 
