@@ -213,7 +213,6 @@ def trim_batch(
     documents: list[dict],
     onnx_dir: str | Path | None = None,
     threshold: float = 0.50,
-    apply_hybrid_rules: bool = False,
     batch_size: int = 128,
 ) -> list[dict]:
     precomputed_results: dict[int, dict] = {}
@@ -391,7 +390,6 @@ def main():
         help="Directory containing model.onnx (default: auto-resolved from EDSAN_TRIMMER_PATH, user cache, or repo artifacts)",
     )
     parser.add_argument("--threshold", type=float, default=0.50)
-    parser.add_argument("--no_hybrid", action="store_true", help="Disable hybrid regex pre/post rules")
     args = parser.parse_args()
 
     # Pre-flight resolution of model directory
@@ -416,7 +414,6 @@ def main():
         documents=payload,
         onnx_dir=resolved_dir,
         threshold=args.threshold,
-        apply_hybrid_rules=not args.no_hybrid,
     )
 
     # Output

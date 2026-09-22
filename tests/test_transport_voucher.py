@@ -8,18 +8,34 @@ These cases assert that:
 
 from __future__ import annotations
 
+import inspect
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("onnxruntime")
 np = pytest.importorskip("numpy")
 
-import sys
-from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import trim_batch_service as worker
 from trim_batch_service import trim_batch
+
+
+def test_worker_exposes_only_model_inference_controls():
+    assert "apply_hybrid_rules" not in inspect.signature(trim_batch).parameters
+
+    worker_script = Path(worker.__file__).resolve()
+    help_result = subprocess.run(
+        [sys.executable, str(worker_script), "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "--no_hybrid" not in help_result.stdout
+
 
 # A real bon de transport. All 495 in the corpus are RECTYPE ORDON7.
 VOUCHER = """BT - BON DE TRANSPORT
