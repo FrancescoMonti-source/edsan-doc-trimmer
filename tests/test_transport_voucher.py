@@ -88,7 +88,16 @@ def ordinary_model_runtime(monkeypatch, tmp_path):
             }
 
     class FakeSession:
-        def __init__(self, *_args, **_kwargs):
+        def __init__(self, *_args, providers=None, **_kwargs):
+            self.providers = providers or ["CPUExecutionProvider"]
+
+        def get_providers(self):
+            return [
+                provider[0] if isinstance(provider, tuple) else provider
+                for provider in self.providers
+            ]
+
+        def disable_fallback(self):
             pass
 
         def run(self, _outputs, inputs):
