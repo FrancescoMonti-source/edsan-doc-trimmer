@@ -36,6 +36,9 @@ DEVICE_PROVIDERS = {
     "dml": "DmlExecutionProvider",
     "migraphx": "MIGraphXExecutionProvider",
 }
+DEVICE_MODES_BY_PROVIDER = {
+    provider: mode for mode, provider in DEVICE_PROVIDERS.items()
+}
 PROVIDER_INSTALL_HINTS = {
     "cuda": "Install onnxruntime-gpu in the Python environment used by redsan.",
     "openvino": (
@@ -222,7 +225,6 @@ def _detect_accelerators() -> set[str]:
     vendor_ids = {
         "10DE": "nvidia",
         "8086": "intel",
-        "1002": "amd",
     }
     detected: set[str] = set()
 
@@ -434,11 +436,7 @@ def _trim_batch_with_provider(
             sess_opts,
             providers=[execution_provider],
         )
-        failed_mode = next(
-            mode
-            for mode, provider in DEVICE_PROVIDERS.items()
-            if provider == failed_provider
-        )
+        failed_mode = DEVICE_MODES_BY_PROVIDER[failed_provider]
         notices.append(
             (
                 "WARNING",
@@ -463,11 +461,7 @@ def _trim_batch_with_provider(
                 providers=[execution_provider],
             )
             active_providers = session.get_providers()
-        failed_mode = next(
-            mode
-            for mode, provider in DEVICE_PROVIDERS.items()
-            if provider == failed_provider
-        )
+        failed_mode = DEVICE_MODES_BY_PROVIDER[failed_provider]
         notices.append(
             (
                 "WARNING",
@@ -619,11 +613,7 @@ def trim_batch(
             batch_size=batch_size,
         )
     except _ProviderExecutionError as err:
-        failed_mode = next(
-            mode
-            for mode, provider in DEVICE_PROVIDERS.items()
-            if provider == err.provider
-        )
+        failed_mode = DEVICE_MODES_BY_PROVIDER[err.provider]
         notice = (
             "WARNING",
             (

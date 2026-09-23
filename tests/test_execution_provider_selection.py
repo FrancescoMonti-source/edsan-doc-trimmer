@@ -56,10 +56,10 @@ def onnx_runtime(monkeypatch, tmp_path):
     return calls
 
 
-def test_auto_uses_cuda_onnx_provider_for_detected_nvidia_gpu(
+def test_unset_device_mode_defaults_to_auto_for_detected_nvidia_gpu(
     monkeypatch, onnx_runtime
 ):
-    monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "auto")
+    monkeypatch.delenv("EDSAN_TRIMMER_DEVICE", raising=False)
     monkeypatch.setattr(
         worker,
         "_detect_accelerators",
