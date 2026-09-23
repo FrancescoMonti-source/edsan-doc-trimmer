@@ -1,6 +1,6 @@
 # How to Create a Release and Host Large Model Assets on Internal GitLab
 
-This guide explains how to create a Release for `edsan-doc-trimmer` on your hospital's internal, on-premises GitLab instance and attach the model archive (`edsan-doc-trimmer-v1.2.0.zip`, containing `model.onnx` for CPU and `model.safetensors` for CUDA acceleration) without bloating git history.
+This guide explains how to create a Release for `edsan-doc-trimmer` on your hospital's internal, on-premises GitLab instance and attach the model archive (`edsan-doc-trimmer-v1.3.0.zip`, containing `model.onnx` for CPU and tokenizer assets; CUDA and OpenVINO use ONNX Runtime execution providers) without bloating git history.
 
 ---
 
@@ -19,7 +19,7 @@ If this URL opens the release form, you're ready! If it says 404 or 403, check i
 ### 2. Where the menu is located in the left sidebar:
 * **GitLab 16+ (Current)**: Left sidebar -> **Deploy** (rocket icon) -> **Releases** -> click blue **New release** button (top right).
 * **GitLab 14 – 15**: Left sidebar -> **Deployments** (or **Project overview**) -> **Releases** -> click **New release**.
-* **Shortcut via Tags**: Left sidebar -> **Code** -> **Tags** -> find tag `v1.2.0` -> click the speech bubble icon / **Add release notes**.
+* **Shortcut via Tags**: Left sidebar -> **Code** -> **Tags** -> find tag `v1.3.0` -> click the speech bubble icon / **Add release notes**.
 
 ### 3. Check your Project Permissions (Must be Developer or Maintainer)
 * In GitLab, **Reporter** and **Guest** roles **cannot** create releases or tags.
@@ -37,14 +37,14 @@ If the "Releases" menu item is completely invisible in the sidebar:
 ## 1. Core Principles: Why GitLab Works This Way
 
 ### Why Does GitLab Require a Tag First?
-* In Git, a **Tag** is an immutable reference pointing to a specific commit hash (e.g. `v1.2.0`).
+* In Git, a **Tag** is an immutable reference pointing to a specific commit hash (e.g. `v1.3.0`).
 * In GitLab, a **Release** is not an independent file folder; it is **metadata, release notes, and attached download links bound to a Git Tag**.
 * Therefore, you cannot have a Release without a Tag. You can either:
-  1. Select an existing Git Tag (e.g. create beforehand via `git tag v1.2.0 && git push origin v1.2.0`), OR
-  2. Type `v1.2.0` in the "Tag name" field of the New Release form and select **Create tag from: main**.
+  1. Select an existing Git Tag (e.g. create beforehand via `git tag v1.3.0 && git push origin v1.3.0`), OR
+  2. Type `v1.3.0` in the "Tag name" field of the New Release form and select **Create tag from: main**.
 
 ### Why Must 442 MB Binaries NEVER Be Committed to Git?
-* **Git history is forever**: If you run `git add model.onnx` or `git add edsan-doc-trimmer-v1.2.0.zip` and commit, that 442 MB blob is baked permanently into `.git/objects`.
+* **Git history is forever**: If you run `git add model.onnx` or `git add edsan-doc-trimmer-v1.3.0.zip` and commit, that 442 MB blob is baked permanently into `.git/objects`.
 * **Permanent clone penalty**: Every colleague who clones the repository (`git clone`) will be forced to download all 442 MB across the hospital network, even if they only want to edit documentation or R code.
 * **Server-side rejection**: Many enterprise hospital GitLab installations set a push limit (e.g., 50 MB or 100 MB per commit). Pushing a 442 MB file directly will fail with `remote: fatal: pack exceeds maximum allowed size`.
 * **Why web UI drag-and-drop fails**: GitLab's web markdown description has a default file upload limit of **10 MB**. Dragging a 442 MB zip into the release notes will fail with HTTP 413 ("Request Entity Too Large").
@@ -71,43 +71,43 @@ GitLab includes a built-in Generic Package Registry designed specifically for st
 4. Click **Create personal access token** and copy the token (`glpat-xxxxxxxxxxxx`).
 
 #### Step 3: Upload the Zip File via cURL
-Run this command from your terminal (PowerShell, Bash, or Command Prompt) where `edsan-doc-trimmer-v1.2.0.zip` is located:
+Run this command from your terminal (PowerShell, Bash, or Command Prompt) where `edsan-doc-trimmer-v1.3.0.zip` is located:
 
 ```bash
 # Set your variables
 GITLAB_URL="https://gitlab.hospital.fr"       # Your internal GitLab base URL
 PROJECT_ID="1428"                              # Your Project ID from Step 1
 TOKEN="glpat-xxxxxxxxxxxx"                     # Your Access Token from Step 2
-ZIP_FILE="artifacts/edsan-doc-trimmer-v1.2.0.zip"
+ZIP_FILE="artifacts/edsan-doc-trimmer-v1.3.0.zip"
 
 # Upload to Generic Package Registry
 curl --header "PRIVATE-TOKEN: ${TOKEN}" \
      --upload-file "${ZIP_FILE}" \
-     "${GITLAB_URL}/api/v4/projects/${PROJECT_ID}/packages/generic/edsan-doc-trimmer/1.2.0/edsan-doc-trimmer-v1.2.0.zip"
+     "${GITLAB_URL}/api/v4/projects/${PROJECT_ID}/packages/generic/edsan-doc-trimmer/1.3.0/edsan-doc-trimmer-v1.3.0.zip"
 ```
 
 *In Windows PowerShell:*
 ```powershell
 $headers = @{ "PRIVATE-TOKEN" = "glpat-xxxxxxxxxxxx" }
-Invoke-RestMethod -Uri "https://gitlab.hospital.fr/api/v4/projects/1428/packages/generic/edsan-doc-trimmer/1.2.0/edsan-doc-trimmer-v1.2.0.zip" `
+Invoke-RestMethod -Uri "https://gitlab.hospital.fr/api/v4/projects/1428/packages/generic/edsan-doc-trimmer/1.3.0/edsan-doc-trimmer-v1.3.0.zip" `
                   -Method Put `
                   -Headers $headers `
-                  -InFile "artifacts\edsan-doc-trimmer-v1.2.0.zip"
+                  -InFile "artifacts\edsan-doc-trimmer-v1.3.0.zip"
 ```
 
 Once uploaded, the permanent download URL for anyone in the hospital with read access is:
 ```
-https://gitlab.hospital.fr/api/v4/projects/1428/packages/generic/edsan-doc-trimmer/1.2.0/edsan-doc-trimmer-v1.2.0.zip
+https://gitlab.hospital.fr/api/v4/projects/1428/packages/generic/edsan-doc-trimmer/1.3.0/edsan-doc-trimmer-v1.3.0.zip
 ```
 
 #### Step 4: Link the Package in the Release
 1. In GitLab, navigate to **Deploy** -> **Releases** -> **New release**.
-2. **Tag name**: Select or type `v1.2.0`.
+2. **Tag name**: Select or type `v1.3.0`.
 3. **Create from**: Select `main`.
-4. **Release title**: `edsan-doc-trimmer v1.2.0: Production DrBERT Document Trimmer`.
+4. **Release title**: `edsan-doc-trimmer v1.3.0: Production DrBERT Document Trimmer`.
 5. Under **Release assets** -> **Release asset links**:
-   * **URL**: `https://gitlab.hospital.fr/api/v4/projects/1428/packages/generic/edsan-doc-trimmer/1.2.0/edsan-doc-trimmer-v1.2.0.zip`
-   * **Link title**: `edsan-doc-trimmer-v1.2.0.zip (DrBERT ONNX CPU + PyTorch CUDA Safetensors)`
+   * **URL**: `https://gitlab.hospital.fr/api/v4/projects/1428/packages/generic/edsan-doc-trimmer/1.3.0/edsan-doc-trimmer-v1.3.0.zip`
+   * **Link title**: `edsan-doc-trimmer-v1.3.0.zip (DrBERT ONNX CPU + ONNX Runtime CUDA and OpenVINO providers)`
    * **Type**: `Package`
 6. Click **Create release**.
 
@@ -117,10 +117,10 @@ https://gitlab.hospital.fr/api/v4/projects/1428/packages/generic/edsan-doc-trimm
 If your hospital's GitLab omnibus configuration has `max_attachment_size` configured to >= 1 GB:
 
 1. Navigate to **Deploy** -> **Releases** -> **New release**.
-2. In the **Release notes** Markdown text box, drag and drop `artifacts/edsan-doc-trimmer-v1.2.0.zip` directly onto the text box.
+2. In the **Release notes** Markdown text box, drag and drop `artifacts/edsan-doc-trimmer-v1.3.0.zip` directly onto the text box.
 3. Wait for the upload bar to complete. GitLab will output a markdown link:
    ```markdown
-   [Download edsan-doc-trimmer-v1.2.0.zip](/uploads/1a2b3c.../edsan-doc-trimmer-v1.2.0.zip)
+   [Download edsan-doc-trimmer-v1.3.0.zip](/uploads/1a2b3c.../edsan-doc-trimmer-v1.3.0.zip)
    ```
 4. Copy that URL and paste it under **Release assets** -> **Release asset links** -> **URL**.
 5. Click **Create release**.
@@ -132,31 +132,31 @@ If your hospital's GitLab omnibus configuration has `max_attachment_size` config
 ### Method C: Hospital HDW Shared Network Storage (Standard for Air-Gapped Platforms)
 On hospital computing servers, multiple data scientists and scripts usually share files via an internal NFS mount or Windows network share:
 
-1. Copy `edsan-doc-trimmer-v1.2.0.zip` directly to the shared models directory and unpack:
+1. Copy `edsan-doc-trimmer-v1.3.0.zip` directly to the shared models directory and unpack:
    ```bash
    # On Linux HDW server:
-   mkdir -p /data/shared/models/edsan-doc-trimmer/v1.2.0
-   unzip artifacts/edsan-doc-trimmer-v1.2.0.zip -d /data/shared/models/edsan-doc-trimmer/v1.2.0/
+   mkdir -p /data/shared/models/edsan-doc-trimmer/v1.3.0
+   unzip artifacts/edsan-doc-trimmer-v1.3.0.zip -d /data/shared/models/edsan-doc-trimmer/v1.3.0/
    chmod -R a+rX /data/shared/models/edsan-doc-trimmer/
    ```
    *On Windows server (PowerShell):*
    ```powershell
-   New-Item -ItemType Directory -Force -Path "D:\shared\models\edsan-doc-trimmer\v1.2.0"
-   Expand-Archive -Path "artifacts\edsan-doc-trimmer-v1.2.0.zip" -DestinationPath "D:\shared\models\edsan-doc-trimmer\v1.2.0" -Force
+   New-Item -ItemType Directory -Force -Path "D:\shared\models\edsan-doc-trimmer\v1.3.0"
+   Expand-Archive -Path "artifacts\edsan-doc-trimmer-v1.3.0.zip" -DestinationPath "D:\shared\models\edsan-doc-trimmer\v1.3.0" -Force
    ```
 2. In the GitLab Release description, document the exact path:
    ```markdown
    ### Shared Server Deployment (HDW / On-Premises)
    The production model is pre-installed on the shared cluster at:
-   `/data/shared/models/edsan-doc-trimmer/v1.2.0`
+   `/data/shared/models/edsan-doc-trimmer/v1.3.0`
 
    To use it in your environment:
    ```bash
-   export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/v1.2.0"
+   export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/v1.3.0"
    ```
    Or in R:
    ```r
-   Sys.setenv(EDSAN_TRIMMER_PATH = "/data/shared/models/edsan-doc-trimmer/v1.2.0")
+   Sys.setenv(EDSAN_TRIMMER_PATH = "/data/shared/models/edsan-doc-trimmer/v1.3.0")
    ```
 3. Create the Release on GitLab referencing this location.
 
@@ -171,10 +171,10 @@ Once the Release is published:
 library(redsan)
 
 # Option A: Install from the downloaded zip file into persistent user cache:
-edsan_install_trimmer("/path/to/downloaded/edsan-doc-trimmer-v1.2.0.zip")
+edsan_install_trimmer("/path/to/downloaded/edsan-doc-trimmer-v1.3.0.zip")
 
 # Option B: Point directly to shared HDW server model:
-Sys.setenv(EDSAN_TRIMMER_PATH = "/data/shared/models/edsan-doc-trimmer/v1.2.0")
+Sys.setenv(EDSAN_TRIMMER_PATH = "/data/shared/models/edsan-doc-trimmer/v1.3.0")
 
 # If Python is in a custom virtual environment:
 Sys.setenv(REDSAN_PYTHON_PATH = "/path/to/python")
@@ -187,9 +187,9 @@ trimmed <- trim_doceds_onnx("Consultation du 12/03/2024. Patient vu pour control
 ```bash
 # Option A: Extract inside the cloned repo
 # Linux / macOS:
-unzip edsan-doc-trimmer-v1.2.0.zip -d artifacts/active_learning/onnx_export
+unzip edsan-doc-trimmer-v1.3.0.zip -d artifacts/active_learning/onnx_export
 # Windows PowerShell:
-Expand-Archive -Path edsan-doc-trimmer-v1.2.0.zip -DestinationPath artifacts/active_learning/onnx_export -Force
+Expand-Archive -Path edsan-doc-trimmer-v1.3.0.zip -DestinationPath artifacts/active_learning/onnx_export -Force
 
 # Option B: Extract to a custom path and export environment variable
 export EDSAN_TRIMMER_PATH="/path/to/extracted_model"

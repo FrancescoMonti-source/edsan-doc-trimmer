@@ -11,6 +11,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,16 +28,35 @@ import numpy as np
 import onnxruntime as ort
 
 WORKER_CONTRACT = "model-only-v1"
+DEVICE_ENV_VAR = "EDSAN_TRIMMER_DEVICE"
+DEVICE_PROVIDERS = {
+    "cpu": "CPUExecutionProvider",
+    "cuda": "CUDAExecutionProvider",
+    "openvino": "OpenVINOExecutionProvider",
+    "dml": "DmlExecutionProvider",
+    "migraphx": "MIGraphXExecutionProvider",
+}
+DEVICE_MODES_BY_PROVIDER = {
+    provider: mode for mode, provider in DEVICE_PROVIDERS.items()
+}
+PROVIDER_INSTALL_HINTS = {
+    "cuda": "Install onnxruntime-gpu in the Python environment used by redsan.",
+    "openvino": (
+        "Install onnxruntime-openvino and the OpenVINO runtime in the Python "
+        "environment used by redsan."
+    ),
+    "dml": "Install an ONNX Runtime build that provides DmlExecutionProvider.",
+    "migraphx": (
+        "Install an ONNX Runtime build with MIGraphXExecutionProvider and its "
+        "ROCm/MIGraphX runtime."
+    ),
+}
+RUNTIME_NOTICE_PREFIX = "EDSAN_TRIMMER_NOTICE:"
 
 try:
-    import torch
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
-    HAS_TORCH_TRANSFORMERS = True
+    from transformers import AutoTokenizer
 except ImportError:
-    torch = None
-    AutoModelForSequenceClassification = None
     AutoTokenizer = None
-    HAS_TORCH_TRANSFORMERS = False
 
 try:
     from tokenizers import Tokenizer
@@ -198,6 +220,155 @@ except ImportError:
         )
 
 
+def _detect_accelerators() -> set[str]:
+    """Detect GPU vendors without consulting ONNX Runtime provider availability."""
+    vendor_ids = {
+        "10DE": "nvidia",
+        "8086": "intel",
+    }
+    detected: set[str] = set()
+
+    if os.name == "nt":
+        powershell = (
+            shutil.which("powershell.exe")
+            or shutil.which("powershell")
+            or shutil.which("pwsh.exe")
+            or shutil.which("pwsh")
+        )
+        if not powershell:
+            return detected
+        command = (
+            "Get-CimInstance Win32_VideoController | "
+            "ForEach-Object { $_.PNPDeviceID }"
+        )
+        try:
+            result = subprocess.run(
+                [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return detected
+        for vendor_id in re.findall(r"VEN_([0-9A-F]{4})", result.stdout.upper()):
+            vendor = vendor_ids.get(vendor_id)
+            if vendor:
+                detected.add(vendor)
+        return detected
+
+    if sys.platform.startswith("linux"):
+        pci_devices = Path("/sys/bus/pci/devices")
+        if not pci_devices.is_dir():
+            return detected
+        for device in pci_devices.iterdir():
+            try:
+                device_class = int((device / "class").read_text().strip(), 16)
+                vendor_id = (device / "vendor").read_text().strip().upper()
+            except (OSError, ValueError):
+                continue
+            if device_class >> 16 != 0x03:
+                continue
+            vendor = vendor_ids.get(vendor_id.removeprefix("0X"))
+            if vendor:
+                detected.add(vendor)
+
+    return detected
+
+
+def _select_execution_provider(
+    device_mode: str | None = None,
+) -> tuple[str, list[tuple[str, str]]]:
+    mode = device_mode
+    if mode is None:
+        mode = os.environ.get(DEVICE_ENV_VAR, "auto")
+    mode = mode.strip().lower()
+    allowed_modes = ("auto", *DEVICE_PROVIDERS)
+    if mode not in allowed_modes:
+        raise ValueError(
+            f"Invalid {DEVICE_ENV_VAR} value {mode!r}; choose one of: "
+            + "|".join(allowed_modes)
+        )
+
+    cpu_provider = DEVICE_PROVIDERS["cpu"]
+    if mode == "cpu":
+        return cpu_provider, []
+
+    available = set(ort.get_available_providers())
+    if mode != "auto":
+        provider = DEVICE_PROVIDERS[mode]
+        if provider in available:
+            return provider, []
+        hint = PROVIDER_INSTALL_HINTS[mode]
+        return cpu_provider, [
+            (
+                "WARNING",
+                (
+                    f"Requested {mode} mode requires {provider}, which is unavailable; "
+                    f"falling back to {cpu_provider}. {hint}"
+                ),
+            )
+        ]
+
+    detected = _detect_accelerators()
+    priority = (
+        ("nvidia", "cuda", "NVIDIA"),
+        ("intel", "openvino", "Intel"),
+    )
+    missing: list[tuple[str, str, str]] = []
+    for vendor, mode_name, label in priority:
+        if vendor not in detected:
+            continue
+        provider = DEVICE_PROVIDERS[mode_name]
+        if provider in available:
+            notices = [
+                (
+                    "WARNING",
+                    (
+                        f"{missing_label} GPU detected, but {missing_provider} is "
+                        f"unavailable; using {provider}. "
+                        f"{PROVIDER_INSTALL_HINTS[missing_mode]}"
+                    ),
+                )
+                for missing_label, missing_mode, missing_provider in missing
+            ]
+            return provider, notices
+        missing.append((label, mode_name, provider))
+
+    notices = [
+        (
+            "WARNING",
+            (
+                f"{label} GPU detected, but {provider} is unavailable; falling back "
+                f"to {cpu_provider}. {PROVIDER_INSTALL_HINTS[mode_name]}"
+            ),
+        )
+        for label, mode_name, provider in missing
+    ]
+    return cpu_provider, notices
+
+
+def _emit_runtime_notices(notices: list[tuple[str, str]]) -> None:
+    for level, message in notices:
+        single_line = " ".join(message.splitlines())
+        sys.stderr.write(f"{RUNTIME_NOTICE_PREFIX}{level}:{single_line}\n")
+    if notices:
+        sys.stderr.flush()
+
+
+def _session_providers(
+    execution_provider: str,
+) -> list[str | tuple[str, dict[str, str]]]:
+    if execution_provider == DEVICE_PROVIDERS["openvino"]:
+        return [
+            (execution_provider, {"device_type": "GPU"}),
+            DEVICE_PROVIDERS["cpu"],
+        ]
+    if execution_provider == DEVICE_PROVIDERS["cpu"]:
+        return [execution_provider]
+    return [execution_provider, DEVICE_PROVIDERS["cpu"]]
+
+
 def _empty_result(doc_id: object, raw_text: str) -> dict:
     return {
         "id": doc_id,
@@ -207,13 +378,24 @@ def _empty_result(doc_id: object, raw_text: str) -> dict:
         "reduction_pct": 100.0 if raw_text else 0.0,
         "preserved_intervals": [],
         "removed_intervals": [],
+        "execution_provider": None,
     }
 
-def trim_batch(
+class _ProviderExecutionError(RuntimeError):
+    def __init__(self, provider: str, cause: Exception):
+        super().__init__(str(cause))
+        self.provider = provider
+        self.cause = cause
+
+
+def _trim_batch_with_provider(
     documents: list[dict],
     onnx_dir: str | Path | None = None,
     threshold: float = 0.50,
     batch_size: int = 128,
+    *,
+    device_mode: str | None = None,
+    extra_notices: list[tuple[str, str]] | None = None,
 ) -> list[dict]:
     precomputed_results: dict[int, dict] = {}
     for index, doc in enumerate(documents):
@@ -229,43 +411,88 @@ def trim_batch(
         return [precomputed_results[index] for index in range(len(documents))]
 
     dir_path = resolve_model_dir(onnx_dir)
-    safetensors_path = dir_path / "model.safetensors"
-    use_cuda = (
-        HAS_TORCH_TRANSFORMERS
-        and torch is not None
-        and torch.cuda.is_available()
-        and safetensors_path.exists()
-    )
+    onnx_path = str(dir_path / "model.onnx")
+    sess_opts = ort.SessionOptions()
+    sess_opts.intra_op_num_threads = os.cpu_count() or 8
+    sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-    if use_cuda:
-        device = torch.device("cuda")
+    execution_provider, notices = _select_execution_provider(device_mode)
+    if extra_notices:
+        notices.extend(extra_notices)
+    session_providers = _session_providers(execution_provider)
+    try:
+        session = ort.InferenceSession(
+            onnx_path,
+            sess_opts,
+            providers=session_providers,
+        )
+    except Exception as err:
+        if execution_provider == DEVICE_PROVIDERS["cpu"]:
+            raise
+        failed_provider = execution_provider
+        execution_provider = DEVICE_PROVIDERS["cpu"]
+        session = ort.InferenceSession(
+            onnx_path,
+            sess_opts,
+            providers=[execution_provider],
+        )
+        failed_mode = DEVICE_MODES_BY_PROVIDER[failed_provider]
+        notices.append(
+            (
+                "WARNING",
+                (
+                    f"Could not initialize {failed_provider} ({err}); falling back to "
+                    f"{execution_provider}. {PROVIDER_INSTALL_HINTS[failed_mode]}"
+                ),
+            )
+        )
+
+    active_providers = session.get_providers()
+    if (
+        execution_provider != DEVICE_PROVIDERS["cpu"]
+        and execution_provider not in active_providers
+    ):
+        failed_provider = execution_provider
+        execution_provider = DEVICE_PROVIDERS["cpu"]
+        if execution_provider not in active_providers:
+            session = ort.InferenceSession(
+                onnx_path,
+                sess_opts,
+                providers=[execution_provider],
+            )
+            active_providers = session.get_providers()
+        failed_mode = DEVICE_MODES_BY_PROVIDER[failed_provider]
+        notices.append(
+            (
+                "WARNING",
+                (
+                    f"ONNX Runtime initialized {failed_provider} with "
+                    f"{active_providers}; falling back to {execution_provider}. "
+                    f"{PROVIDER_INSTALL_HINTS[failed_mode]}"
+                ),
+            )
+        )
+
+    session.disable_fallback()
+
+    _emit_runtime_notices(notices)
+    for result in precomputed_results.values():
+        result["execution_provider"] = execution_provider
+
+    tok_json = dir_path / "tokenizer.json"
+    if USE_RUST_TOKENIZER and Tokenizer is not None and tok_json.exists():
+        tokenizer = Tokenizer.from_file(str(tok_json))
+        tokenizer.enable_padding(length=128, pad_id=1, pad_token="<pad>")
+        tokenizer.enable_truncation(max_length=128)
+        rust_tok = True
+    elif AutoTokenizer is not None:
         tokenizer = AutoTokenizer.from_pretrained(str(dir_path))
-        model = AutoModelForSequenceClassification.from_pretrained(str(dir_path)).to(device)
-        model.eval()
         rust_tok = False
     else:
-        device = None
-        model = None
-        onnx_path = str(dir_path / "model.onnx")
-        sess_opts = ort.SessionOptions()
-        sess_opts.intra_op_num_threads = os.cpu_count() or 8
-        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        session = ort.InferenceSession(onnx_path, sess_opts, providers=["CPUExecutionProvider"])
-
-        tok_json = dir_path / "tokenizer.json"
-        if USE_RUST_TOKENIZER and Tokenizer is not None and tok_json.exists():
-            tokenizer = Tokenizer.from_file(str(tok_json))
-            tokenizer.enable_padding(length=128, pad_id=1, pad_token="<pad>")
-            tokenizer.enable_truncation(max_length=128)
-            rust_tok = True
-        elif AutoTokenizer is not None:
-            tokenizer = AutoTokenizer.from_pretrained(str(dir_path))
-            rust_tok = False
-        else:
-            raise RuntimeError(
-                "Neither 'tokenizers' nor 'transformers' is installed. "
-                "Please run: pip install tokenizers"
-            )
+        raise RuntimeError(
+            "Neither 'tokenizers' nor 'transformers' is installed. "
+            "Please run: pip install tokenizers"
+        )
 
     results = []
 
@@ -288,44 +515,36 @@ def trim_batch(
                 targets = [s.target_text for s in batch]
                 contexts = [f"{s.context_before} \n {s.context_after}".strip() for s in batch]
 
-                if use_cuda:
+                if rust_tok:
+                    pairs = list(zip(targets, contexts, strict=False))
+                    encs = tokenizer.encode_batch(pairs)
+                    input_ids = np.array([e.ids for e in encs], dtype=np.int64)
+                    attention_mask = np.array([e.attention_mask for e in encs], dtype=np.int64)
+                    ort_inputs = {
+                        "input_ids": input_ids,
+                        "attention_mask": attention_mask,
+                    }
+                else:
                     encodings = tokenizer(
                         targets,
                         contexts,
                         padding=True,
                         truncation=True,
                         max_length=128,
-                        return_tensors="pt",
-                    ).to(device)
-                    with torch.inference_mode():
-                        logits = model(**encodings).logits
-                        probs = torch.softmax(logits, dim=-1).cpu().numpy()
-                else:
-                    if rust_tok:
-                        pairs = list(zip(targets, contexts, strict=False))
-                        encs = tokenizer.encode_batch(pairs)
-                        input_ids = np.array([e.ids for e in encs], dtype=np.int64)
-                        attention_mask = np.array([e.attention_mask for e in encs], dtype=np.int64)
-                        ort_inputs = {
-                            "input_ids": input_ids,
-                            "attention_mask": attention_mask,
-                        }
-                    else:
-                        encodings = tokenizer(
-                            targets,
-                            contexts,
-                            padding=True,
-                            truncation=True,
-                            max_length=128,
-                            return_tensors="np",
-                        )
-                        ort_inputs = {
-                            "input_ids": encodings["input_ids"],
-                            "attention_mask": encodings["attention_mask"],
-                        }
+                        return_tensors="np",
+                    )
+                    ort_inputs = {
+                        "input_ids": encodings["input_ids"],
+                        "attention_mask": encodings["attention_mask"],
+                    }
+                try:
                     logits = session.run(["logits"], ort_inputs)[0]
-                    exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
-                    probs = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
+                except ort.capi.onnxruntime_pybind11_state.EPFail as err:
+                    if execution_provider == DEVICE_PROVIDERS["cpu"]:
+                        raise
+                    raise _ProviderExecutionError(execution_provider, err) from err
+                exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
+                probs = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
 
                 for s, p in zip(batch, probs, strict=False):
                     p_bp = float(p[1])
@@ -374,9 +593,43 @@ def trim_batch(
             "reduction_pct": round(reduction, 2),
             "preserved_intervals": preserved_intervals,
             "removed_intervals": removed_intervals,
+            "execution_provider": execution_provider,
         })
 
     return results
+
+
+def trim_batch(
+    documents: list[dict],
+    onnx_dir: str | Path | None = None,
+    threshold: float = 0.50,
+    batch_size: int = 128,
+) -> list[dict]:
+    try:
+        return _trim_batch_with_provider(
+            documents,
+            onnx_dir=onnx_dir,
+            threshold=threshold,
+            batch_size=batch_size,
+        )
+    except _ProviderExecutionError as err:
+        failed_mode = DEVICE_MODES_BY_PROVIDER[err.provider]
+        notice = (
+            "WARNING",
+            (
+                f"Inference with {err.provider} failed ({err.cause}); rerunning the "
+                f"entire batch with {DEVICE_PROVIDERS['cpu']}. "
+                f"{PROVIDER_INSTALL_HINTS[failed_mode]}"
+            ),
+        )
+        return _trim_batch_with_provider(
+            documents,
+            onnx_dir=onnx_dir,
+            threshold=threshold,
+            batch_size=batch_size,
+            device_mode="cpu",
+            extra_notices=[notice],
+        )
 
 
 def main():
