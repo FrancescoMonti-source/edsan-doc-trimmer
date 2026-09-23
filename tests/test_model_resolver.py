@@ -81,7 +81,7 @@ def test_resolve_model_dir_not_found_raises_informative_error(tmp_path: Path, mo
 
     err_msg = str(excinfo.value)
     assert "[ERROR] edsan-doc-trimmer model not found!" in err_msg
-    assert "edsan-doc-trimmer-v1.2.0.zip" in err_msg
+    assert "edsan-doc-trimmer-v1.3.0.zip" in err_msg
     assert "EDSAN_TRIMMER_PATH" in err_msg
     assert "edsan_install_trimmer" in err_msg
     assert str(nonexistent.resolve()) in err_msg

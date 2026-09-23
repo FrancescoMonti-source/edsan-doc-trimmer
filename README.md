@@ -141,19 +141,23 @@ python -m pytest -v
 ## Setup in Hospital / Air-Gapped HDW Environments
 
 ### Why Doesn't `git clone` Include the Model?
-The production DrBERT ONNX model (`model.onnx`), CUDA weights (`model.safetensors`), and tokenizer assets are **gitignored** (`artifacts/` in `.gitignore`).
+The production ONNX model (`model.onnx`), tokenizer assets, and training checkpoints are **gitignored** (`artifacts/` in `.gitignore`).
 Committing multi-hundred-megabyte binaries directly to Git would bloat repository history permanently, drastically slow down cloning and branching across hospital networks, and exceed enterprise GitLab push size limits.
 
-Instead, the model is packaged as a standalone release archive: **`edsan-doc-trimmer-v1.2.0.zip`**.
+The last published runtime archive is `edsan-doc-trimmer-v1.2.0.zip`. The provider-aware worker in this branch is packaged as version `1.3.0`; it uses ONNX Runtime for every inference provider. The old `1.2.0` archive remains a separate legacy release.
 
-### Archive Contents
-The release archive contains everything required for standalone, offline inference with zero internet access:
-* **`model.onnx`** (442.7 MB): Standalone DrBERT ONNX runtime graph for CPU inference (runs via `onnxruntime` and `tokenizers` without PyTorch).
-* **`model.safetensors`** (442.5 MB): PyTorch model weights enabling CUDA GPU acceleration when PyTorch and an NVIDIA GPU are available.
+### Archive Contents (version 1.3.0)
+The provider-aware archive contains everything required for standalone, offline inference with zero internet access:
+* **`model.onnx`** (442.7 MB): The single inference graph, executed through `onnxruntime` with CPU, CUDA, or OpenVINO providers.
 * **`tokenizer.json`**, **`tokenizer_config.json`**, **`special_tokens_map.json`**: Fast Rust / Hugging Face tokenizer assets.
 * **`config.json`**: Sequence classification architecture metadata.
-* **`artifact.json`**: Manifest declaring `artifact_version` (`1.2.0`) and the contract implemented by the packaged worker (`model-only-v1`).
-* **`trim_batch_service.py`**: High-performance batch inference service invoked by `redsan`. Every non-empty document follows Student v3 inference; there is no deterministic transport-voucher shortcut or second trimming pipeline.
+* **`artifact.json`**: Manifest declaring artifact version `1.3.0` and worker contract `model-only-v1`.
+* **`trim_batch_service.py`**: Batch worker using one ONNX Runtime inference path and reporting the selected execution provider. PyTorch checkpoint weights are not included in the runtime archive.
+
+### Device selection (version 1.3.0)
+The worker defaults to `EDSAN_TRIMMER_DEVICE=auto`. Auto selects CUDA for a detected NVIDIA GPU when `CUDAExecutionProvider` is available, OpenVINO for a detected Intel GPU when `OpenVINOExecutionProvider` is available, and otherwise CPU. Set the variable to `cpu`, `cuda`, `openvino`, `dml`, or `migraphx` to override the choice.
+
+If an accelerator is detected but its ONNX Runtime provider is unavailable, the worker continues on CPU and emits a marked warning with an install suggestion, such as `onnxruntime-gpu` for CUDA or `onnxruntime-openvino` plus OpenVINO for Intel. R surfaces these warnings. Table results include `TRIM_EXECUTION_PROVIDER`; character-vector results carry the provider as an attribute.
 
 ### 1. Where to Get `edsan-doc-trimmer-v1.2.0.zip`
 * **Hospital Internal GitLab**: Navigate to **Deploy > Releases** (tag `v1.2.0`) and download the attached asset `edsan-doc-trimmer-v1.2.0.zip`.

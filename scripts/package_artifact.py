@@ -39,8 +39,8 @@ def read_worker_contract(worker_path: Path) -> str:
 def package_artifact(
     onnx_dir: str = "artifacts/active_learning/onnx_export",
     worker_script: str = "scripts/trim_batch_service.py",
-    output_zip: str = "artifacts/edsan-doc-trimmer-v1.2.0.zip",
-    version: str = "1.2.0",
+    output_zip: str = "artifacts/edsan-doc-trimmer-v1.3.0.zip",
+    version: str = "1.3.0",
     install_to_cache: bool = True,
 ):
     model_path = Path(onnx_dir).resolve()
@@ -86,9 +86,6 @@ def package_artifact(
     with zipfile.ZipFile(out_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for rf in required_files:
             zf.write(model_path / rf, arcname=rf)
-        # Add safetensors if present
-        if (model_path / "model.safetensors").exists():
-            zf.write(model_path / "model.safetensors", arcname="model.safetensors")
 
     print(f"Archive packaged successfully: {out_zip_path} ({out_zip_path.stat().st_size:,} bytes)")
 
@@ -101,8 +98,6 @@ def package_artifact(
             print(f"Installing validated artifact to user cache: {target_cache}...")
             for rf in required_files:
                 shutil.copy2(model_path / rf, target_cache / rf)
-            if (model_path / "model.safetensors").exists():
-                shutil.copy2(model_path / "model.safetensors", target_cache / "model.safetensors")
             print(f"Artifact successfully installed to {target_cache}!")
 
 
@@ -110,8 +105,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Package compliant trimmer release archive")
     parser.add_argument("--onnx_dir", type=str, default="artifacts/active_learning/onnx_export")
     parser.add_argument("--worker", type=str, default="scripts/trim_batch_service.py")
-    parser.add_argument("--output", type=str, default="artifacts/edsan-doc-trimmer-v1.2.0.zip")
-    parser.add_argument("--version", type=str, default="1.2.0")
+    parser.add_argument("--output", type=str, default="artifacts/edsan-doc-trimmer-v1.3.0.zip")
+    parser.add_argument("--version", type=str, default="1.3.0")
     parser.add_argument("--no_cache_install", action="store_true")
     args = parser.parse_args()
 

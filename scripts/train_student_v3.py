@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import shutil
 from pathlib import Path
 
 from redsan_doc_trimmer.export_onnx import export_to_onnx
@@ -61,13 +60,6 @@ def train_v3(
         onnx_filename="model.onnx",
     )
     logger.info("ONNX artifact exported successfully to: %s", onnx_dir)
-
-    # 3. Copy model.safetensors to onnx_dir for fast PyTorch CUDA inference
-    safetensors_src = best_model_path / "model.safetensors"
-    if safetensors_src.exists():
-        shutil.copy2(safetensors_src, onnx_dir / "model.safetensors")
-        logger.info("Copied model.safetensors to %s", onnx_dir)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
