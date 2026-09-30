@@ -45,7 +45,9 @@ MANIFEST_NAME = "artifact.json"
 MIN_ARTIFACT_VERSION = (1, 2, 0)
 REQUIRED_WORKER_CONTRACT = "model-only-v1"
 
-_VERSION_RE = re.compile(r"^\d+(?:\.\d+)*$")
+# [0-9] and fullmatch, as in redsan's R pattern: \d would accept non-ASCII
+# digits and $ a trailing newline.
+_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*")
 
 
 def get_trimmer_cache_root() -> Path:
@@ -78,7 +80,7 @@ def get_user_cache_dirs() -> list[Path]:
 
 def parse_artifact_version(text: object) -> tuple[int, ...] | None:
     """Parses a dotted numeric version (``1.3.0``); returns None when it isn't one."""
-    if not isinstance(text, str) or not _VERSION_RE.match(text):
+    if not isinstance(text, str) or not _VERSION_RE.fullmatch(text):
         return None
     return tuple(int(part) for part in text.split("."))
 

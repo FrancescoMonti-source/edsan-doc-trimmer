@@ -220,6 +220,8 @@ if __name__ == "__main__":
     except FileNotFoundError as err:
         sys.stderr.write(str(err) + "\n")
         sys.exit(1)
+    if not args.onnx_dir:
+        sys.stderr.write(f"edsan-doc-trimmer: using model at {resolved_onnx_dir}\n")
 
     # Load a test document
     target_doc = None

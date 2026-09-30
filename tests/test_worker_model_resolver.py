@@ -84,6 +84,49 @@ def test_legacy_slot_used_with_warning(resolve, cache_root):
         assert resolve() == (cache_root / "v1").resolve()
 
 
+def test_invalid_installs_are_ignored(resolve, cache_root):
+    make_artifact(cache_root / "1.1.0", "1.1.0")  # below the 1.2.0 floor
+    make_artifact(cache_root / "1.5.0", "1.5.0", worker_contract="other-contract")
+    make_artifact(cache_root / "1.6.0", "1.6.0", omit=("tokenizer.json",))
+    make_artifact(cache_root / "1.4.0", "1.4.1")  # name differs from manifest
+    make_artifact(cache_root / "١.٣.٠", "١.٣.٠")  # non-ASCII digits
+    make_artifact(cache_root / "1.3.0", "1.3.0")
+    assert resolve() == (cache_root / "1.3.0").resolve()
+
+
+def test_legacy_path_variable_and_pin_whitespace(resolve, cache_root, tmp_path, monkeypatch):
+    make_artifact(cache_root / "1.2.0", "1.2.0")
+    make_artifact(cache_root / "1.3.0", "1.3.0")
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / "model.onnx").write_text("fake")
+    monkeypatch.setenv("REDSAN_TRIMMER_PATH", str(legacy))
+    assert resolve() == legacy.resolve()
+
+    monkeypatch.delenv("REDSAN_TRIMMER_PATH")
+    monkeypatch.setenv("EDSAN_TRIMMER_VERSION", "  1.2.0 ")
+    assert resolve() == (cache_root / "1.2.0").resolve()
+
+
+def test_xdg_cache_home_used_when_r_user_cache_dir_unset(resolve, tmp_path, monkeypatch):
+    monkeypatch.delenv("R_USER_CACHE_DIR")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    root = tmp_path / "xdg" / "R" / "edsan_doc_trimmer"
+    make_artifact(root / "1.3.0", "1.3.0")
+    assert resolve() == (root / "1.3.0").resolve()
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+def test_cache_root_defaults_match_per_platform(platform, tmp_path, monkeypatch):
+    from redsan_doc_trimmer.model_resolver import get_trimmer_cache_root
+
+    for var in ("R_USER_CACHE_DIR", "XDG_CACHE_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "lad"))
+    monkeypatch.setattr(sys, "platform", platform)
+    assert worker._standalone_cache_root() == get_trimmer_cache_root()
+
+
 def test_dev_checkout_never_selected_and_not_found_is_release_agnostic(resolve, cache_root):
     make_artifact(Path.cwd() / "artifacts" / "active_learning" / "onnx_export", "1.3.0")
     with pytest.raises(FileNotFoundError) as excinfo:

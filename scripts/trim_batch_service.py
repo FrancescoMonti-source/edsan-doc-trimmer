@@ -153,7 +153,7 @@ except ImportError:
 
 # The released archive carries this worker without the `redsan_doc_trimmer`
 # package, so the resolver below is a self-contained copy of
-# `redsan_doc_trimmer.model_resolver` (kept equal by tests/test_model_resolver.py).
+# `redsan_doc_trimmer.model_resolver` (kept equal by tests/test_worker_model_resolver.py).
 # Cache contract (redsan#58): <R_user_dir cache root>/<artifact_version>/.
 _STANDALONE_REQUIRED_FILES = (
     "model.onnx",
@@ -180,7 +180,9 @@ def _standalone_cache_root() -> Path:
 
 
 def _standalone_parse_version(text: object) -> tuple[int, ...] | None:
-    if not isinstance(text, str) or not re.match(r"^\d+(?:\.\d+)*$", text):
+    # [0-9] and fullmatch, as in R: \d would accept non-ASCII digits and $ a
+    # trailing newline.
+    if not isinstance(text, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", text):
         return None
     return tuple(int(part) for part in text.split("."))
 
@@ -740,6 +742,10 @@ def main():
     except FileNotFoundError as err:
         sys.stderr.write(str(err) + "\n")
         sys.exit(1)
+    if not args.onnx_dir:
+        # Auto-discovery may pick an installed version over a release run in
+        # place, so say which artifact runs. redsan always passes --onnx_dir.
+        sys.stderr.write(f"edsan-doc-trimmer: using model at {resolved_dir}\n")
 
     # Read input
     if not args.input or args.input == "-":
