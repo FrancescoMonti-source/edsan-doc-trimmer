@@ -135,18 +135,22 @@ def test_legacy_variable_ignored_when_edsan_variable_is_set(tmp_path: Path, cach
     monkeypatch.setenv("EDSAN_TRIMMER_PATH", str(tmp_path / "missing"))
     monkeypatch.setenv("REDSAN_TRIMMER_PATH", str(legacy_dir))
 
-    with pytest.warns(UserWarning, match="EDSAN_TRIMMER_PATH"):
-        with pytest.raises(FileNotFoundError):
-            resolve_model_dir()
+    with pytest.raises(FileNotFoundError, match="EDSAN_TRIMMER_PATH"):
+        resolve_model_dir()
 
 
-def test_invalid_env_path_warns_and_falls_back_to_cache(tmp_path: Path, cache_root: Path, monkeypatch):
+def test_invalid_env_path_is_an_error_not_a_fallback(tmp_path: Path, cache_root: Path, monkeypatch):
     make_artifact(cache_root / "1.3.0", "1.3.0")
     monkeypatch.setenv("EDSAN_TRIMMER_PATH", str(tmp_path / "missing"))
 
-    with pytest.warns(UserWarning, match="EDSAN_TRIMMER_PATH"):
-        resolved = resolve_model_dir()
-    assert resolved == (cache_root / "1.3.0").resolve()
+    with pytest.raises(FileNotFoundError, match="EDSAN_TRIMMER_PATH is set to"):
+        resolve_model_dir()
+
+
+def test_hyphenated_version_folders_are_ignored(cache_root: Path):
+    make_artifact(cache_root / "1-3-0", "1-3-0")
+    with pytest.raises(FileNotFoundError):
+        resolve_model_dir()
 
 
 # --- versioned cache ---------------------------------------------------------

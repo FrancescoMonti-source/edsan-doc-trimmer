@@ -45,7 +45,7 @@ MANIFEST_NAME = "artifact.json"
 MIN_ARTIFACT_VERSION = (1, 2, 0)
 REQUIRED_WORKER_CONTRACT = "model-only-v1"
 
-_VERSION_RE = re.compile(r"^\d+(?:[.-]\d+)*$")
+_VERSION_RE = re.compile(r"^\d+(?:\.\d+)*$")
 
 
 def get_trimmer_cache_root() -> Path:
@@ -80,7 +80,7 @@ def parse_artifact_version(text: object) -> tuple[int, ...] | None:
     """Parses a dotted numeric version (``1.3.0``); returns None when it isn't one."""
     if not isinstance(text, str) or not _VERSION_RE.match(text):
         return None
-    return tuple(int(part) for part in re.split(r"[.-]", text))
+    return tuple(int(part) for part in text.split("."))
 
 
 def _read_manifest(artifact_dir: Path) -> dict | None:
@@ -207,8 +207,8 @@ def resolve_model_dir(candidate_dir: str | Path | None = None) -> Path:
     1. An explicit `candidate_dir` (a directory holding `model.onnx`, or the
        `model.onnx` file itself). Wins over everything; if invalid, raises.
     2. `EDSAN_TRIMMER_PATH` (or, only when that is unset, the legacy
-       `REDSAN_TRIMMER_PATH`). If it does not hold a model, a warning is issued
-       and resolution continues.
+       `REDSAN_TRIMMER_PATH`). If it does not hold a model, raises
+       FileNotFoundError; it never falls through.
     3. `EDSAN_TRIMMER_VERSION` pin: `<cache root>/<version>/`. A pin that is not
        installed raises FileNotFoundError listing the installed versions.
     4. The highest valid installed version under the cache root.
@@ -241,10 +241,10 @@ def resolve_model_dir(candidate_dir: str | Path | None = None) -> Path:
         attempted.append(p)
         if (p / "model.onnx").is_file():
             return p
-        warnings.warn(
+        # Falling through would silently run a different artifact than the one named.
+        raise FileNotFoundError(
             f"{env_var} is set to '{env_value}', but 'model.onnx' was not found in that "
-            "folder; falling back to the installed trimmer versions.",
-            stacklevel=2,
+            f"folder. Fix the path, or unset {env_var} to use the installed trimmer versions."
         )
 
     # 3. Version pin

@@ -180,9 +180,9 @@ def _standalone_cache_root() -> Path:
 
 
 def _standalone_parse_version(text: object) -> tuple[int, ...] | None:
-    if not isinstance(text, str) or not re.match(r"^\d+(?:[.-]\d+)*$", text):
+    if not isinstance(text, str) or not re.match(r"^\d+(?:\.\d+)*$", text):
         return None
-    return tuple(int(part) for part in re.split(r"[.-]", text))
+    return tuple(int(part) for part in text.split("."))
 
 
 def _standalone_valid_version(folder: Path) -> str | None:
@@ -264,10 +264,9 @@ def _standalone_resolve_model_dir(candidate_dir: str | Path | None = None) -> Pa
         attempted.append(p)
         if (p / "model.onnx").is_file():
             return p
-        warnings.warn(
+        raise FileNotFoundError(
             f"{env_var} is set to '{env_value}', but 'model.onnx' was not found in that "
-            "folder; falling back to the installed trimmer versions.",
-            stacklevel=2,
+            f"folder. Fix the path, or unset {env_var} to use the installed trimmer versions."
         )
 
     installed = _standalone_installed(root)

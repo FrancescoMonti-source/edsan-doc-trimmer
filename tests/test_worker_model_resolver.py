@@ -71,6 +71,13 @@ def test_env_path_and_explicit_directory_precedence(resolve, cache_root, tmp_pat
     assert resolve(explicit) == explicit.resolve()
 
 
+def test_invalid_env_path_is_an_error(resolve, cache_root, tmp_path, monkeypatch):
+    make_artifact(cache_root / "1.3.0", "1.3.0")
+    monkeypatch.setenv("EDSAN_TRIMMER_PATH", str(tmp_path / "missing"))
+    with pytest.raises(FileNotFoundError, match="EDSAN_TRIMMER_PATH is set to"):
+        resolve()
+
+
 def test_legacy_slot_used_with_warning(resolve, cache_root):
     make_artifact(cache_root / "v1", "1.3.0")
     with pytest.warns(UserWarning, match="legacy"):
