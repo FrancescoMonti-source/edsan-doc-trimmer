@@ -10,7 +10,6 @@ dependencies = [
     "datasets>=2.18.0",
     "accelerate>=0.28.0",
     "onnx>=1.16.0",
-    "onnxruntime>=1.17.0",
     "pydantic>=2.6.0",
     "scikit-learn>=1.4.0",
     "tqdm>=4.66.0",
@@ -22,6 +21,17 @@ dev = [
     "pytest>=8.0.0",
     "ruff>=0.3.0",
 ]
+
+# ONNX Runtime ships as two packages that share one module name, so exactly one
+# group is installed. `uv sync` gives CPU; on an NVIDIA machine use
+# `uv sync --no-group cpu --group gpu --extra dev`.
+[dependency-groups]
+cpu = ["onnxruntime>=1.17.0"]
+gpu = ["onnxruntime-gpu[cuda,cudnn]>=1.21.0"]
+
+[tool.uv]
+default-groups = ["cpu"]
+conflicts = [[{ group = "cpu" }, { group = "gpu" }]]
 
 [build-system]
 requires = ["hatchling"]
