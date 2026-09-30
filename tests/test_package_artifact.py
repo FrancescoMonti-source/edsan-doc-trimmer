@@ -97,16 +97,19 @@ def test_exported_at_follows_model_file_date(export_dir, tmp_path):
         assert json.loads(packaged.read("artifact.json"))["exported_at"] == "2025-01-02"
 
 
-@pytest.mark.parametrize("version", ["", "1.3", "v1.3.0", "1.3.0.0", "01.3.0", "latest"])
+@pytest.mark.parametrize(
+    "version",
+    ["", "1.3", "v1.3.0", "1.3.0.0", "01.3.0", "latest", "2.0.0-rc.1", "1.0.0+build.5", "1.3.0\n"],
+)
 def test_invalid_version_is_rejected_before_any_work(export_dir, tmp_path, version):
-    with pytest.raises(ValueError, match="semantic version"):
+    with pytest.raises(ValueError, match="not a release version"):
         package(export_dir, tmp_path / "out", version=version)
 
     assert not (tmp_path / "out").exists()
 
 
-@pytest.mark.parametrize("version", ["1.3.0", "0.0.1", "2.0.0-rc.1", "1.0.0+build.5"])
-def test_semver_versions_are_accepted(export_dir, tmp_path, version):
+@pytest.mark.parametrize("version", ["1.3.0", "0.0.1", "10.20.30"])
+def test_release_versions_are_accepted(export_dir, tmp_path, version):
     archive = package(export_dir, tmp_path / "out", version=version)
 
     assert archive.name == f"edsan-doc-trimmer-v{version}.zip"
@@ -127,7 +130,7 @@ def test_cli_rejects_non_semver_with_clear_message(export_dir, tmp_path, capsys)
         )
 
     assert excinfo.value.code != 0
-    assert "semantic version" in capsys.readouterr().err
+    assert "not a release version" in capsys.readouterr().err
 
 
 def test_cli_prints_redsan_install_command(export_dir, tmp_path, capsys):
@@ -278,6 +281,30 @@ def test_no_warning_when_tag_matches_head_or_is_absent(export_dir, tmp_path, git
     git(git_repo, "tag", "-a", "v1.3.0", "-m", "annotated")
     package(export_dir, tmp_path / "out", repo_root=git_repo, force=True)
     assert capsys.readouterr().err == ""
+
+
+def test_warns_when_packaged_worker_has_uncommitted_changes(export_dir, tmp_path, git_repo, capsys):
+    worker = git_repo / "trim_batch_service.py"
+    worker.write_text(TESTED_WORKER.read_text(encoding="utf-8"), encoding="utf-8")
+    git(git_repo, "add", ".")
+    git(git_repo, "commit", "-q", "-m", "worker")
+
+    def build(force=False):
+        package_artifact(
+            version="1.3.0",
+            onnx_dir=str(export_dir),
+            worker_script=str(worker),
+            output_dir=str(tmp_path / "out"),
+            force=force,
+            repo_root=git_repo,
+        )
+
+    build()
+    assert "uncommitted" not in capsys.readouterr().err
+
+    worker.write_text(worker.read_text(encoding="utf-8") + "\n# local edit\n", encoding="utf-8")
+    build(force=True)
+    assert "uncommitted changes" in capsys.readouterr().err
 
 
 def test_packaging_outside_git_repo_does_not_fail(export_dir, tmp_path):

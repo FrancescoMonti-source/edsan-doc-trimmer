@@ -34,12 +34,10 @@ WORKER_FILE = "trim_batch_service.py"
 MANIFEST_FILE = "artifact.json"
 ALLOWLISTED_EXPORT_FILES = (*MODEL_FILES, MANIFEST_FILE, WORKER_FILE)
 
-_IDENT = r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
-_SEMVER = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
-    rf"(?:-{_IDENT}(?:\.{_IDENT})*)?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
-)
+# Plain X.Y.Z only: redsan installs a release into a folder named after its
+# artifact_version and accepts dotted numbers only, so a prerelease or build
+# suffix would package fine and then fail at edsan_install_trimmer().
+_RELEASE_VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 
 
 def read_worker_contract(worker_path: Path) -> str:
@@ -66,12 +64,13 @@ def read_worker_contract(worker_path: Path) -> str:
 
 
 def validate_version(version: str) -> str:
-    """Return ``version`` if it is a semantic version, else raise ValueError."""
+    """Return ``version`` if it is a plain X.Y.Z release version, else raise ValueError."""
 
-    if not isinstance(version, str) or not _SEMVER.match(version):
+    if not isinstance(version, str) or not _RELEASE_VERSION.fullmatch(version):
         raise ValueError(
-            f"Version {version!r} is not a semantic version (expected X.Y.Z, "
-            "optionally with -prerelease or +build)."
+            f"Version {version!r} is not a release version: expected X.Y.Z with "
+            "numbers only (no prerelease or build suffix), because redsan installs "
+            "each release into a folder named after its version."
         )
     return version
 
@@ -104,6 +103,30 @@ def warn_if_tag_not_at_head(version: str, repo_root: Path) -> None:
         print(
             f"warning: git tag {tag} exists but does not point at HEAD "
             f"({tagged[:10]} vs {head[:10]}); this archive may not match the tag.",
+            file=sys.stderr,
+        )
+
+
+def warn_if_worker_uncommitted(worker_path: Path, repo_root: Path) -> None:
+    """Warn when the packaged worker differs from its committed version.
+
+    The archive takes the worker from the working tree, so uncommitted edits
+    would ship in a release that no commit or tag reproduces.
+    """
+
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--", str(worker_path)],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return
+    if result.returncode == 0 and result.stdout.strip():
+        print(
+            f"warning: {worker_path.name} has uncommitted changes; the archive will "
+            "ship the working-tree version, which no commit reproduces.",
             file=sys.stderr,
         )
 
@@ -162,6 +185,7 @@ def package_artifact(
             )
     worker_contract = read_worker_contract(worker_path)
     warn_if_tag_not_at_head(version, repo_root)
+    warn_if_worker_uncommitted(worker_path, repo_root)
 
     # UTC keeps the manifest date independent of the packaging machine's zone.
     exported_at = datetime.fromtimestamp(
@@ -211,7 +235,7 @@ def main(argv: list[str] | None = None) -> Path:
         description="Package an immutable trimmer release archive"
     )
     parser.add_argument(
-        "--version", required=True, help="Semantic version of the release, e.g. 1.3.0"
+        "--version", required=True, help="Release version as X.Y.Z (numbers only), e.g. 1.3.0"
     )
     parser.add_argument("--onnx_dir", default="artifacts/active_learning/onnx_export")
     parser.add_argument("--worker", default="scripts/trim_batch_service.py")
