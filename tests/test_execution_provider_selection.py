@@ -197,7 +197,7 @@ def test_auto_prefers_cuda_when_both_gpu_providers_are_available(
 
 
 def test_unknown_device_override_is_rejected(monkeypatch, onnx_runtime):
-    monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "gpu")
+    monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "tpu")
 
     with pytest.raises(ValueError, match="EDSAN_TRIMMER_DEVICE"):
         worker.trim_batch([{"id": "doc-1", "text": "Clinical narrative"}])
@@ -374,3 +374,66 @@ def test_runtime_provider_failure_restarts_the_batch_on_cpu(
     assert result["execution_provider"] == "CPUExecutionProvider"
     assert result["trimmed_text"] == "first\nsecond\nthird"
     assert "CUDA execution provider failed" in capsys.readouterr().err
+
+
+def test_gpu_mode_uses_the_detected_gpu(monkeypatch, onnx_runtime):
+    monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "gpu")
+    monkeypatch.setattr(worker, "_detect_accelerators", lambda: {"nvidia"})
+    monkeypatch.setattr(
+        worker.ort,
+        "get_available_providers",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+
+    result = worker.trim_batch([{"id": "doc-1", "text": "Clinical narrative"}])[0]
+
+    assert result["execution_provider"] == "CUDAExecutionProvider"
+
+
+def test_gpu_mode_accepts_an_undetected_gpu_provider(monkeypatch, onnx_runtime):
+    monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "gpu")
+    monkeypatch.setattr(worker, "_detect_accelerators", lambda: set())
+    monkeypatch.setattr(
+        worker.ort,
+        "get_available_providers",
+        lambda: ["DmlExecutionProvider", "CPUExecutionProvider"],
+    )
+
+    result = worker.trim_batch([{"id": "doc-1", "text": "Clinical narrative"}])[0]
+
+    assert result["execution_provider"] == "DmlExecutionProvider"
+
+
+def test_gpu_mode_refuses_cpu_when_the_gpu_provider_is_missing(
+    monkeypatch, onnx_runtime
+):
+    monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "gpu")
+    monkeypatch.setattr(worker, "_detect_accelerators", lambda: {"nvidia"})
+    monkeypatch.setattr(
+        worker.ort, "get_available_providers", lambda: ["CPUExecutionProvider"]
+    )
+
+    with pytest.raises(RuntimeError, match="refuses to run on CPUExecutionProvider"):
+        worker.trim_batch([{"id": "doc-1", "text": "Clinical narrative"}])
+
+    assert "providers" not in onnx_runtime
+
+
+def test_gpu_mode_refuses_cpu_when_the_gpu_provider_fails_to_initialize(
+    monkeypatch, onnx_runtime
+):
+    class BrokenSession:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError("cublasLt64_13.dll is missing")
+
+    monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "gpu")
+    monkeypatch.setattr(worker, "_detect_accelerators", lambda: {"nvidia"})
+    monkeypatch.setattr(
+        worker.ort,
+        "get_available_providers",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    monkeypatch.setattr(worker.ort, "InferenceSession", BrokenSession)
+
+    with pytest.raises(RuntimeError, match="refuses to fall back to CPU"):
+        worker.trim_batch([{"id": "doc-1", "text": "Clinical narrative"}])

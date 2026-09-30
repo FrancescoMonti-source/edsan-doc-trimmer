@@ -45,6 +45,8 @@ if _preload_dlls is not None:
 
 WORKER_CONTRACT = "model-only-v1"
 DEVICE_ENV_VAR = "EDSAN_TRIMMER_DEVICE"
+# Like "auto", but any CPU fallback is an error instead of a warning.
+GPU_ONLY_MODE = "gpu"
 DEVICE_PROVIDERS = {
     "cpu": "CPUExecutionProvider",
     "cuda": "CUDAExecutionProvider",
@@ -382,23 +384,45 @@ def _detect_accelerators() -> set[str]:
     return detected
 
 
-def _select_execution_provider(
-    device_mode: str | None = None,
-) -> tuple[str, list[tuple[str, str]]]:
+def _resolve_device_mode(device_mode: str | None = None) -> str:
     mode = device_mode
     if mode is None:
         mode = os.environ.get(DEVICE_ENV_VAR, "auto")
     mode = mode.strip().lower()
-    allowed_modes = ("auto", *DEVICE_PROVIDERS)
+    allowed_modes = ("auto", GPU_ONLY_MODE, *DEVICE_PROVIDERS)
     if mode not in allowed_modes:
         raise ValueError(
             f"Invalid {DEVICE_ENV_VAR} value {mode!r}; choose one of: "
             + "|".join(allowed_modes)
         )
+    return mode
+
+
+def _select_execution_provider(
+    device_mode: str | None = None,
+) -> tuple[str, list[tuple[str, str]]]:
+    mode = _resolve_device_mode(device_mode)
 
     cpu_provider = DEVICE_PROVIDERS["cpu"]
     if mode == "cpu":
         return cpu_provider, []
+
+    if mode == GPU_ONLY_MODE:
+        provider, notices = _select_execution_provider("auto")
+        if provider == cpu_provider:
+            # Detection only knows NVIDIA and Intel; any other installed GPU
+            # provider (dedicated or integrated) is still acceptable here.
+            for gpu_mode in ("cuda", "openvino", "dml", "migraphx"):
+                if DEVICE_PROVIDERS[gpu_mode] in set(ort.get_available_providers()):
+                    return DEVICE_PROVIDERS[gpu_mode], []
+            detail = " ".join(message for _, message in notices) or (
+                "No GPU execution provider is available in this Python environment."
+            )
+            raise RuntimeError(
+                f"{DEVICE_ENV_VAR}={GPU_ONLY_MODE} refuses to run on {cpu_provider}. "
+                f"{detail}"
+            )
+        return provider, notices
 
     available = set(ort.get_available_providers())
     if mode != "auto":
@@ -523,6 +547,7 @@ def _trim_batch_with_provider(
     sess_opts.intra_op_num_threads = os.cpu_count() or 8
     sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
+    gpu_only = _resolve_device_mode(device_mode) == GPU_ONLY_MODE
     execution_provider, notices = _select_execution_provider(device_mode)
     if extra_notices:
         notices.extend(extra_notices)
@@ -536,6 +561,12 @@ def _trim_batch_with_provider(
     except Exception as err:
         if execution_provider == DEVICE_PROVIDERS["cpu"]:
             raise
+        if gpu_only:
+            raise RuntimeError(
+                f"Could not initialize {execution_provider} ({err}); "
+                f"{DEVICE_ENV_VAR}={GPU_ONLY_MODE} refuses to fall back to CPU. "
+                f"{PROVIDER_INSTALL_HINTS[DEVICE_MODES_BY_PROVIDER[execution_provider]]}"
+            ) from err
         failed_provider = execution_provider
         execution_provider = DEVICE_PROVIDERS["cpu"]
         session = ort.InferenceSession(
@@ -559,6 +590,13 @@ def _trim_batch_with_provider(
         execution_provider != DEVICE_PROVIDERS["cpu"]
         and execution_provider not in active_providers
     ):
+        if gpu_only:
+            raise RuntimeError(
+                f"ONNX Runtime initialized {execution_provider} with "
+                f"{active_providers}; {DEVICE_ENV_VAR}={GPU_ONLY_MODE} refuses to "
+                f"fall back to CPU. "
+                f"{PROVIDER_INSTALL_HINTS[DEVICE_MODES_BY_PROVIDER[execution_provider]]}"
+            )
         failed_provider = execution_provider
         execution_provider = DEVICE_PROVIDERS["cpu"]
         if execution_provider not in active_providers:
