@@ -31,6 +31,11 @@ import onnxruntime as ort
 # onnxruntime-gpu (>=1.21) only finds CUDA/cuDNN from the nvidia-* pip wheels
 # after preload_dlls(); without it CUDAExecutionProvider is listed but fails to
 # initialize and ONNX Runtime silently falls back to CPU.
+# ONNX Runtime's Windows log sink writes UTF-16 to stderr. R's processx reads
+# worker stderr as text and never returns on the embedded NUL bytes, so silence
+# its own logger; provider problems are reported via EDSAN_TRIMMER_NOTICE lines.
+ort.set_default_logger_severity(4)
+
 _preload_dlls = getattr(ort, "preload_dlls", None)
 if _preload_dlls is not None:
     try:
@@ -514,6 +519,7 @@ def _trim_batch_with_provider(
     dir_path = resolve_model_dir(onnx_dir)
     onnx_path = str(dir_path / "model.onnx")
     sess_opts = ort.SessionOptions()
+    sess_opts.log_severity_level = 4
     sess_opts.intra_op_num_threads = os.cpu_count() or 8
     sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
