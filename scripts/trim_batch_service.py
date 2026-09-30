@@ -28,6 +28,16 @@ from dataclasses import dataclass
 import numpy as np
 import onnxruntime as ort
 
+# onnxruntime-gpu (>=1.21) only finds CUDA/cuDNN from the nvidia-* pip wheels
+# after preload_dlls(); without it CUDAExecutionProvider is listed but fails to
+# initialize and ONNX Runtime silently falls back to CPU.
+_preload_dlls = getattr(ort, "preload_dlls", None)
+if _preload_dlls is not None:
+    try:
+        _preload_dlls()
+    except Exception:
+        pass
+
 WORKER_CONTRACT = "model-only-v1"
 DEVICE_ENV_VAR = "EDSAN_TRIMMER_DEVICE"
 DEVICE_PROVIDERS = {

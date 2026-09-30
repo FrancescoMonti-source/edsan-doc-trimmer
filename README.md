@@ -157,6 +157,8 @@ The provider-aware archive contains everything required for standalone, offline 
 ### Device selection
 The worker defaults to `EDSAN_TRIMMER_DEVICE=auto`. Auto selects CUDA for a detected NVIDIA GPU when `CUDAExecutionProvider` is available, OpenVINO for a detected Intel GPU when `OpenVINOExecutionProvider` is available, and otherwise CPU. Set the variable to `cpu`, `cuda`, `openvino`, `dml`, or `migraphx` to override the choice.
 
+For CUDA on Windows/Linux, replace the CPU package in the Python environment used by redsan: `pip uninstall -y onnxruntime` then `pip install "onnxruntime-gpu[cuda,cudnn]"`. The worker calls `onnxruntime.preload_dlls()` at startup so the CUDA/cuDNN pip wheels are found; a CPU-only `onnxruntime` or missing CUDA libraries otherwise cause a CPU fallback.
+
 If an accelerator is detected but its ONNX Runtime provider is unavailable, the worker continues on CPU and emits a marked warning with an install suggestion, such as `onnxruntime-gpu` for CUDA or `onnxruntime-openvino` plus OpenVINO for Intel. R surfaces these warnings. Table results include `TRIM_EXECUTION_PROVIDER`; character-vector results carry the provider as an attribute.
 
 ### Releasing a new archive (maintainers)
