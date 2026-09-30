@@ -185,7 +185,8 @@ trimmed <- trim_doceds_onnx("Consultation du 12/03/2024. Patient vu pour control
 
 ### For Python Users
 ```bash
-# Option A: Extract inside the cloned repo
+# Option A: Extract inside the cloned repo (then name it explicitly:
+#   EDSAN_TRIMMER_PATH=artifacts/active_learning/onnx_export or --onnx_dir; it is no longer auto-detected)
 # Linux / macOS:
 unzip edsan-doc-trimmer-v1.3.0.zip -d artifacts/active_learning/onnx_export
 # Windows PowerShell:

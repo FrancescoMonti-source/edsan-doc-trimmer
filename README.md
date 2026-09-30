@@ -205,7 +205,9 @@ unzip edsan-doc-trimmer-v1.2.0.zip -d artifacts/active_learning/onnx_export
 # Windows PowerShell:
 Expand-Archive -Path edsan-doc-trimmer-v1.2.0.zip -DestinationPath artifacts/active_learning/onnx_export -Force
 ```
-The scripts automatically detect models located in `artifacts/active_learning/onnx_export`.
+The scripts no longer detect `artifacts/active_learning/onnx_export` on their own (it is training output, not a release). Name it explicitly with `--onnx_dir artifacts/active_learning/onnx_export` or `EDSAN_TRIMMER_PATH`, or install the archive with redsan (see below).
+
+**Automatic model discovery** (used when `--onnx_dir` is not given) follows redsan's versioned trimmer cache: `EDSAN_TRIMMER_PATH` (legacy `REDSAN_TRIMMER_PATH`), then the `EDSAN_TRIMMER_VERSION` pin, then the highest valid `<cache root>/<version>/` (the cache root is `tools::R_user_dir("edsan_doc_trimmer", "cache")`), then the legacy `<cache root>/v1` slot. A folder counts only if its name equals the `artifact_version` in its `artifact.json`.
 
 #### Option B: Extract to custom folder and set `EDSAN_TRIMMER_PATH`
 ```bash

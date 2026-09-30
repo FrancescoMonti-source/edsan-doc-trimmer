@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 # Ensure repo src/ is in sys.path if running directly from script
@@ -150,74 +151,163 @@ except ImportError:
             )
         return samples
 
-try:
-    from redsan_doc_trimmer.model_resolver import resolve_model_dir
-except ImportError:
-    def resolve_model_dir(candidate_dir: str | Path | None = None) -> Path:
-        if candidate_dir is not None and str(candidate_dir).strip():
-            cand = Path(candidate_dir).expanduser().resolve()
-            if cand.is_file() and cand.name.lower() == "model.onnx":
-                cand = cand.parent
-            if (cand / "model.onnx").is_file():
-                return cand
-            raise FileNotFoundError(f"[ERROR] model.onnx not found in: {cand}")
+# The released archive carries this worker without the `redsan_doc_trimmer`
+# package, so the resolver below is a self-contained copy of
+# `redsan_doc_trimmer.model_resolver` (kept equal by tests/test_model_resolver.py).
+# Cache contract (redsan#58): <R_user_dir cache root>/<artifact_version>/.
+_STANDALONE_REQUIRED_FILES = (
+    "model.onnx",
+    "tokenizer.json",
+    "trim_batch_service.py",
+    "artifact.json",
+)
 
-        for env_var in ("EDSAN_TRIMMER_PATH", "REDSAN_TRIMMER_PATH"):
-            val = os.environ.get(env_var, "").strip()
-            if val:
-                p = Path(val).expanduser().resolve()
-                if p.is_file() and p.name.lower() == "model.onnx":
-                    p = p.parent
-                if (p / "model.onnx").is_file():
-                    return p
 
-        # Check script parent directory
-        script_p = Path(__file__).resolve().parent
-        if (script_p / "model.onnx").is_file():
-            return script_p
+def _standalone_cache_root() -> Path:
+    base = os.environ.get("R_USER_CACHE_DIR", "").strip() or os.environ.get(
+        "XDG_CACHE_HOME", ""
+    ).strip()
+    if base:
+        root = Path(base)
+    elif sys.platform == "win32":
+        lad = os.environ.get("LOCALAPPDATA", "").strip()
+        root = (Path(lad) if lad else Path.home() / "AppData" / "Local") / "R" / "cache"
+    elif sys.platform == "darwin":
+        root = Path.home() / "Library" / "Caches" / "org.R-project.R"
+    else:
+        root = Path.home() / ".cache"
+    return root.expanduser() / "R" / "edsan_doc_trimmer"
 
-        # Check cwd
-        cur = Path.cwd().resolve()
-        if (cur / "model.onnx").is_file():
-            return cur
 
-        repo_cand = cur / "artifacts" / "active_learning" / "onnx_export"
-        if (repo_cand / "model.onnx").is_file():
-            return repo_cand
+def _standalone_parse_version(text: object) -> tuple[int, ...] | None:
+    if not isinstance(text, str) or not re.match(r"^\d+(?:[.-]\d+)*$", text):
+        return None
+    return tuple(int(part) for part in re.split(r"[.-]", text))
 
-        # Check standard user cache directories (populated by redsan::edsan_install_trimmer)
-        home = Path.home()
-        cache_cands: list[Path] = []
-        if os.name == "nt":
-            lad = os.environ.get("LOCALAPPDATA")
-            if lad:
-                cache_cands.append(Path(lad) / "R" / "cache" / "R" / "edsan_doc_trimmer" / "v1")
-                cache_cands.append(Path(lad) / "edsan_doc_trimmer" / "v1")
-            cache_cands.append(home / "AppData" / "Local" / "R" / "cache" / "R" / "edsan_doc_trimmer" / "v1")
-            cache_cands.append(home / "AppData" / "Local" / "edsan_doc_trimmer" / "v1")
-        else:
-            xdg = os.environ.get("XDG_CACHE_HOME")
-            if xdg:
-                cache_cands.append(Path(xdg) / "R" / "edsan_doc_trimmer" / "v1")
-                cache_cands.append(Path(xdg) / "edsan_doc_trimmer" / "v1")
-            cache_cands.append(home / ".cache" / "R" / "edsan_doc_trimmer" / "v1")
-            cache_cands.append(home / ".cache" / "edsan_doc_trimmer" / "v1")
 
-        for c in cache_cands:
-            if (c / "model.onnx").is_file():
-                return c
+def _standalone_valid_version(folder: Path) -> str | None:
+    if not all((folder / name).is_file() for name in _STANDALONE_REQUIRED_FILES):
+        return None
+    try:
+        manifest = json.loads((folder / "artifact.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    version = manifest.get("artifact_version")
+    parsed = _standalone_parse_version(version)
+    if parsed is None or parsed < (1, 2, 0):
+        return None
+    if manifest.get("worker_contract") != WORKER_CONTRACT:
+        return None
+    return version
 
-        raise FileNotFoundError(
+
+def _standalone_installed(root: Path) -> list[tuple[str, Path]]:
+    try:
+        children = [c for c in root.iterdir() if c.is_dir()]
+    except OSError:
+        return []
+    found = [
+        (c.name, c)
+        for c in children
+        if _standalone_parse_version(c.name) is not None
+        and _standalone_valid_version(c) == c.name
+    ]
+    found.sort(key=lambda item: (_standalone_parse_version(item[0]), item[0]), reverse=True)
+    return found
+
+
+def _standalone_resolve_model_dir(candidate_dir: str | Path | None = None) -> Path:
+    def normalize(value: str | Path) -> Path:
+        path = Path(value).expanduser().resolve()
+        if path.is_file() and path.name.lower() == "model.onnx":
+            path = path.parent
+        return path
+
+    def not_found(attempted: list[Path], root: Path) -> FileNotFoundError:
+        listing = "\n".join(f"  - {p}" for p in attempted)
+        return FileNotFoundError(
             "================================================================================\n"
             "[ERROR] edsan-doc-trimmer model not found!\n"
             "================================================================================\n"
-            "The model file 'model.onnx' could not be located.\n"
+            "The model file 'model.onnx' could not be located in:\n"
+            f"{listing}\n"
             "HOW TO FIX:\n"
-            "  1. Set the EDSAN_TRIMMER_PATH environment variable to the model folder:\n"
-            "     export EDSAN_TRIMMER_PATH=/path/to/extracted_model\n"
-            "  2. Or specify --onnx_dir /path/to/extracted_model\n"
+            "  1. Install a release archive from R: "
+            'redsan::edsan_install_trimmer("path/to/edsan-doc-trimmer-<version>.zip")\n'
+            f"     (installed versions live in {root}/<version>/; pin one with EDSAN_TRIMMER_VERSION)\n"
+            "  2. Or set the EDSAN_TRIMMER_PATH environment variable to an extracted archive\n"
+            "  3. Or specify --onnx_dir /path/to/extracted_model\n"
             "================================================================================"
         )
+
+    if candidate_dir is not None and str(candidate_dir).strip():
+        cand = normalize(candidate_dir)
+        if (cand / "model.onnx").is_file():
+            return cand
+        raise not_found([cand], _standalone_cache_root())
+
+    attempted: list[Path] = []
+    root = _standalone_cache_root()
+
+    env_var, env_value = next(
+        (
+            (v, os.environ[v].strip())
+            for v in ("EDSAN_TRIMMER_PATH", "REDSAN_TRIMMER_PATH")
+            if os.environ.get(v, "").strip()
+        ),
+        (None, ""),
+    )
+    if env_var:
+        p = normalize(env_value)
+        attempted.append(p)
+        if (p / "model.onnx").is_file():
+            return p
+        warnings.warn(
+            f"{env_var} is set to '{env_value}', but 'model.onnx' was not found in that "
+            "folder; falling back to the installed trimmer versions.",
+            stacklevel=2,
+        )
+
+    installed = _standalone_installed(root)
+    pin = os.environ.get("EDSAN_TRIMMER_VERSION", "").strip()
+    if pin:
+        for version, path in installed:
+            if version == pin:
+                return path.resolve()
+        listing = ", ".join(v for v, _ in installed) if installed else "none"
+        raise FileNotFoundError(
+            f"EDSAN_TRIMMER_VERSION is set to '{pin}', but that edsan-doc-trimmer version is "
+            f"not installed in {root}. Installed versions: {listing}."
+        )
+    if installed:
+        return installed[0][1].resolve()
+    attempted.append(root / "<version>")
+
+    legacy = root / "v1"
+    if _standalone_valid_version(legacy) is not None:
+        warnings.warn(
+            f"Using the legacy trimmer install at {legacy}; reinstall the release with "
+            "redsan::edsan_install_trimmer() to place it in a versioned folder.",
+            stacklevel=2,
+        )
+        return legacy.resolve()
+    attempted.append(legacy)
+
+    # An extracted release run in place: this script's folder, then the cwd.
+    for folder in (Path(__file__).resolve().parent, Path.cwd().resolve()):
+        if folder not in attempted:
+            attempted.append(folder)
+        if (folder / "model.onnx").is_file():
+            return folder
+    raise not_found(attempted, root)
+
+
+try:
+    from redsan_doc_trimmer.model_resolver import resolve_model_dir
+except ImportError:
+    resolve_model_dir = _standalone_resolve_model_dir
 
 
 def _detect_accelerators() -> set[str]:
@@ -640,7 +730,7 @@ def main():
         "--onnx_dir",
         type=str,
         default=None,
-        help="Directory containing model.onnx (default: auto-resolved from EDSAN_TRIMMER_PATH, user cache, or repo artifacts)",
+        help="Directory containing model.onnx (default: auto-resolved from EDSAN_TRIMMER_PATH, EDSAN_TRIMMER_VERSION, or the highest installed version in the trimmer cache)",
     )
     parser.add_argument("--threshold", type=float, default=0.50)
     args = parser.parse_args()

@@ -93,7 +93,8 @@ def package_artifact(
     if install_to_cache:
         cache_dirs = get_user_cache_dirs()
         if cache_dirs:
-            target_cache = cache_dirs[0]
+            # cache_dirs[0] is the cache root; each version lives in its own folder.
+            target_cache = cache_dirs[0] / version
             target_cache.mkdir(parents=True, exist_ok=True)
             print(f"Installing validated artifact to user cache: {target_cache}...")
             for rf in required_files:

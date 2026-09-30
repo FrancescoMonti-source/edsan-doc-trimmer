@@ -101,70 +101,7 @@ except ImportError:
             )
         return samples
 
-try:
-    from redsan_doc_trimmer.model_resolver import resolve_model_dir
-except ImportError:
-    def resolve_model_dir(candidate_dir: str | Path | None = None) -> Path:
-        if candidate_dir is not None and str(candidate_dir).strip():
-            cand = Path(candidate_dir).expanduser().resolve()
-            if cand.is_file() and cand.name.lower() == "model.onnx":
-                cand = cand.parent
-            if (cand / "model.onnx").is_file():
-                return cand
-            raise FileNotFoundError(f"[ERROR] model.onnx not found in: {cand}")
-
-        for env_var in ("EDSAN_TRIMMER_PATH", "REDSAN_TRIMMER_PATH"):
-            val = os.environ.get(env_var, "").strip()
-            if val:
-                p = Path(val).expanduser().resolve()
-                if p.is_file() and p.name.lower() == "model.onnx":
-                    p = p.parent
-                if (p / "model.onnx").is_file():
-                    return p
-
-        script_p = Path(__file__).resolve().parent
-        if (script_p / "model.onnx").is_file():
-            return script_p
-
-        cur = Path.cwd().resolve()
-        if (cur / "model.onnx").is_file():
-            return cur
-
-        repo_cand = cur / "artifacts" / "active_learning" / "onnx_export"
-        if (repo_cand / "model.onnx").is_file():
-            return repo_cand
-
-        # Check standard user cache directories (populated by redsan::edsan_install_trimmer)
-        home = Path.home()
-        cache_cands: list[Path] = []
-        if os.name == "nt":
-            lad = os.environ.get("LOCALAPPDATA")
-            if lad:
-                cache_cands.append(Path(lad) / "R" / "cache" / "R" / "edsan_doc_trimmer" / "v1")
-                cache_cands.append(Path(lad) / "edsan_doc_trimmer" / "v1")
-            cache_cands.append(home / "AppData" / "Local" / "R" / "cache" / "R" / "edsan_doc_trimmer" / "v1")
-            cache_cands.append(home / "AppData" / "Local" / "edsan_doc_trimmer" / "v1")
-        else:
-            xdg = os.environ.get("XDG_CACHE_HOME")
-            if xdg:
-                cache_cands.append(Path(xdg) / "R" / "edsan_doc_trimmer" / "v1")
-                cache_cands.append(Path(xdg) / "edsan_doc_trimmer" / "v1")
-            cache_cands.append(home / ".cache" / "R" / "edsan_doc_trimmer" / "v1")
-            cache_cands.append(home / ".cache" / "edsan_doc_trimmer" / "v1")
-
-        for c in cache_cands:
-            if (c / "model.onnx").is_file():
-                return c
-
-        raise FileNotFoundError(
-            "================================================================================\n"
-            "[ERROR] edsan-doc-trimmer model not found!\n"
-            "================================================================================\n"
-            "The model file 'model.onnx' could not be located.\n"
-            "Please set the EDSAN_TRIMMER_PATH environment variable or specify --onnx_dir.\n"
-            "================================================================================"
-        )
-
+from redsan_doc_trimmer.model_resolver import resolve_model_dir
 
 
 def trim_document(
@@ -271,7 +208,7 @@ if __name__ == "__main__":
         "--onnx_dir",
         type=str,
         default=None,
-        help="Directory containing model.onnx (default: auto-resolved from EDSAN_TRIMMER_PATH, user cache, or repo artifacts)",
+        help="Directory containing model.onnx (default: auto-resolved from EDSAN_TRIMMER_PATH, EDSAN_TRIMMER_VERSION, or the highest installed version in the trimmer cache)",
     )
     parser.add_argument("--corpus", type=str, default="data/raw/corpus_sample.jsonl")
     parser.add_argument("--doc_id", type=str, default=None)

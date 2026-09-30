@@ -151,7 +151,8 @@ trimmed_bundle <- trim_doceds_onnx(bundle)
 
 ### 6.4 Deployment for Python Users
 ```bash
-# Option 1: Unpack in repo artifacts folder
+# Option 1: Unpack in repo artifacts folder (then name it explicitly:
+#   EDSAN_TRIMMER_PATH=artifacts/active_learning/onnx_export or --onnx_dir; it is no longer auto-detected)
 # On Linux / macOS:
 unzip edsan-doc-trimmer-v1.3.0.zip -d artifacts/active_learning/onnx_export
 # On Windows PowerShell:
