@@ -73,11 +73,6 @@ def get_trimmer_cache_root() -> Path:
     return root.expanduser() / "R" / CACHE_PACKAGE_NAME
 
 
-def get_user_cache_dirs() -> list[Path]:
-    """Returns the cache roots searched for installed artifacts (redsan's only)."""
-    return [get_trimmer_cache_root()]
-
-
 def parse_artifact_version(text: object) -> tuple[int, ...] | None:
     """Parses a dotted numeric version (``1.3.0``); returns None when it isn't one."""
     if not isinstance(text, str) or not _VERSION_RE.fullmatch(text):

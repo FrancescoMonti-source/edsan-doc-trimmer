@@ -11,7 +11,6 @@ import pytest
 from redsan_doc_trimmer.model_resolver import (
     REQUIRED_ARTIFACT_FILES,
     get_trimmer_cache_root,
-    get_user_cache_dirs,
     list_installed_artifacts,
     resolve_model_dir,
 )
@@ -372,7 +371,3 @@ def test_cache_root_windows_default(clean_cache_env, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(clean_cache_env / "lad"))
 
     assert get_trimmer_cache_root() == clean_cache_env / "lad" / "R" / "cache" / "R" / "edsan_doc_trimmer"
-
-
-def test_get_user_cache_dirs_returns_the_cache_root(cache_root: Path):
-    assert get_user_cache_dirs() == [cache_root]
