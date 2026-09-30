@@ -1,16 +1,45 @@
 #!/usr/bin/env python3
-"""Packages a compliant edsan-doc-trimmer release archive with artifact.json."""
+"""Packages an immutable edsan-doc-trimmer release archive.
+
+The training export folder is only ever read. The archive is assembled in a
+temporary staging folder from an allowlist of export files, the worker script
+and a generated ``artifact.json``, then re-opened and checked before it is
+moved into place. Installation is left to ``redsan::edsan_install_trimmer()``.
+"""
 
 from __future__ import annotations
 
 import argparse
 import ast
 import json
+import os
+import re
 import shutil
+import subprocess
+import sys
+import tempfile
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
-from redsan_doc_trimmer.model_resolver import get_user_cache_dirs
+ARCHIVE_PREFIX = "edsan-doc-trimmer"
+MODEL_FILES = (
+    "model.onnx",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "config.json",
+)
+WORKER_FILE = "trim_batch_service.py"
+MANIFEST_FILE = "artifact.json"
+ALLOWLISTED_EXPORT_FILES = (*MODEL_FILES, MANIFEST_FILE, WORKER_FILE)
+
+_IDENT = r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
+_SEMVER = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    rf"(?:-{_IDENT}(?:\.{_IDENT})*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 
 
 def read_worker_contract(worker_path: Path) -> str:
@@ -36,84 +65,181 @@ def read_worker_contract(worker_path: Path) -> str:
     )
 
 
+def validate_version(version: str) -> str:
+    """Return ``version`` if it is a semantic version, else raise ValueError."""
+
+    if not isinstance(version, str) or not _SEMVER.match(version):
+        raise ValueError(
+            f"Version {version!r} is not a semantic version (expected X.Y.Z, "
+            "optionally with -prerelease or +build)."
+        )
+    return version
+
+
+def archive_name(version: str) -> str:
+    return f"{ARCHIVE_PREFIX}-v{version}.zip"
+
+
+def warn_if_tag_not_at_head(version: str, repo_root: Path) -> None:
+    """Warn when git tag ``v<version>`` exists but does not point at HEAD."""
+
+    def rev(ref: str) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet", ref],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return None
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    tag = f"v{version}"
+    tagged = rev(f"refs/tags/{tag}^{{commit}}")
+    if tagged is None:
+        return
+    head = rev("HEAD")
+    if head is not None and tagged != head:
+        print(
+            f"warning: git tag {tag} exists but does not point at HEAD "
+            f"({tagged[:10]} vs {head[:10]}); this archive may not match the tag.",
+            file=sys.stderr,
+        )
+
+
+def verify_archive(archive: Path) -> None:
+    """Fail unless ``archive`` holds exactly the allowlisted files, once each."""
+
+    with zipfile.ZipFile(archive) as packaged:
+        names = packaged.namelist()
+        expected = set(ALLOWLISTED_EXPORT_FILES)
+        unexpected = sorted(set(names) - expected)
+        missing = sorted(expected - set(names))
+        duplicated = sorted({n for n in names if names.count(n) > 1})
+        if unexpected or missing or duplicated:
+            raise RuntimeError(
+                f"Archive {Path(archive).name} does not contain exactly the "
+                f"allowlisted files (unexpected: {unexpected}; missing: {missing}; "
+                f"duplicated: {duplicated})."
+            )
+        corrupt = packaged.testzip()
+        if corrupt is not None:
+            raise RuntimeError(
+                f"Archive {Path(archive).name} has a corrupt member: {corrupt}"
+            )
+
+
 def package_artifact(
+    version: str,
     onnx_dir: str = "artifacts/active_learning/onnx_export",
     worker_script: str = "scripts/trim_batch_service.py",
-    output_zip: str = "artifacts/edsan-doc-trimmer-v1.3.0.zip",
-    version: str = "1.3.0",
-    install_to_cache: bool = True,
-):
+    output_dir: str = "artifacts",
+    force: bool = False,
+    repo_root: Path | None = None,
+) -> Path:
+    """Build ``<output_dir>/edsan-doc-trimmer-v<version>.zip`` and return its path.
+
+    ``onnx_dir`` is read-only: nothing is written into it.
+    """
+
+    validate_version(version)
     model_path = Path(onnx_dir).resolve()
     worker_path = Path(worker_script).resolve()
-    out_zip_path = Path(output_zip).resolve()
-    out_zip_path.parent.mkdir(parents=True, exist_ok=True)
-    worker_contract = read_worker_contract(worker_path)
+    out_zip_path = (Path(output_dir) / archive_name(version)).resolve()
+    if repo_root is None:
+        repo_root = Path(__file__).resolve().parent.parent
 
-    # 1. Create artifact.json
+    if out_zip_path.exists() and not force:
+        raise FileExistsError(
+            f"{out_zip_path} already exists; releases are immutable. "
+            "Pass --force to overwrite it."
+        )
+    for filename in MODEL_FILES:
+        if not (model_path / filename).is_file():
+            raise FileNotFoundError(
+                f"Missing required artifact file: {model_path / filename}"
+            )
+    worker_contract = read_worker_contract(worker_path)
+    warn_if_tag_not_at_head(version, repo_root)
+
+    # UTC keeps the manifest date independent of the packaging machine's zone.
+    exported_at = datetime.fromtimestamp(
+        (model_path / "model.onnx").stat().st_mtime, tz=timezone.utc
+    ).strftime("%Y-%m-%d")
     manifest = {
-        "artifact_name": "edsan-doc-trimmer",
+        "artifact_name": ARCHIVE_PREFIX,
         "artifact_version": version,
         "worker_contract": worker_contract,
         "model_type": "DrBERT-sequence-classification",
-        "exported_at": "2026-09-21",
+        "exported_at": exported_at,
     }
-    manifest_path = model_path / "artifact.json"
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
-    print(f"Created {manifest_path}")
 
-    # 2. Copy worker script to onnx_dir so direct checkouts satisfy redsan validation
-    shutil.copy2(worker_path, model_path / "trim_batch_service.py")
-    print(f"Copied worker script to {model_path / 'trim_batch_service.py'}")
+    out_zip_path.parent.mkdir(parents=True, exist_ok=True)
+    partial = out_zip_path.with_name(out_zip_path.name + ".part")
+    try:
+        with tempfile.TemporaryDirectory(prefix="edsan-trimmer-staging-") as tmp:
+            staging = Path(tmp)
+            for filename in MODEL_FILES:
+                shutil.copy2(model_path / filename, staging / filename)
+            shutil.copy2(worker_path, staging / WORKER_FILE)
+            (staging / MANIFEST_FILE).write_text(
+                json.dumps(manifest, indent=2), encoding="utf-8"
+            )
 
-    # 3. Verify all required files exist
-    required_files = [
-        "model.onnx",
-        "tokenizer.json",
-        "tokenizer_config.json",
-        "special_tokens_map.json",
-        "config.json",
-        "artifact.json",
-        "trim_batch_service.py",
-    ]
-    for rf in required_files:
-        p = model_path / rf
-        if not p.exists():
-            raise FileNotFoundError(f"Missing required artifact file: {p}")
+            print(f"Creating release archive: {out_zip_path}...")
+            with zipfile.ZipFile(
+                partial, "w", compression=zipfile.ZIP_DEFLATED
+            ) as zf:
+                for filename in ALLOWLISTED_EXPORT_FILES:
+                    zf.write(staging / filename, arcname=filename)
 
-    # 4. Create zip archive
-    print(f"Creating release archive: {out_zip_path}...")
-    with zipfile.ZipFile(out_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for rf in required_files:
-            zf.write(model_path / rf, arcname=rf)
+        verify_archive(partial)
+        os.replace(partial, out_zip_path)
+    finally:
+        partial.unlink(missing_ok=True)
 
-    print(f"Archive packaged successfully: {out_zip_path} ({out_zip_path.stat().st_size:,} bytes)")
+    print(
+        f"Archive packaged successfully: {out_zip_path} "
+        f"({out_zip_path.stat().st_size:,} bytes)"
+    )
+    return out_zip_path
 
-    # 5. Optional: Install directly into user cache directory
-    if install_to_cache:
-        cache_dirs = get_user_cache_dirs()
-        if cache_dirs:
-            target_cache = cache_dirs[0]
-            target_cache.mkdir(parents=True, exist_ok=True)
-            print(f"Installing validated artifact to user cache: {target_cache}...")
-            for rf in required_files:
-                shutil.copy2(model_path / rf, target_cache / rf)
-            print(f"Artifact successfully installed to {target_cache}!")
+
+def main(argv: list[str] | None = None) -> Path:
+    parser = argparse.ArgumentParser(
+        description="Package an immutable trimmer release archive"
+    )
+    parser.add_argument(
+        "--version", required=True, help="Semantic version of the release, e.g. 1.3.0"
+    )
+    parser.add_argument("--onnx_dir", default="artifacts/active_learning/onnx_export")
+    parser.add_argument("--worker", default="scripts/trim_batch_service.py")
+    parser.add_argument(
+        "--output_dir",
+        default="artifacts",
+        help="Folder receiving edsan-doc-trimmer-v<version>.zip",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Overwrite an existing archive"
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        archive = package_artifact(
+            version=args.version,
+            onnx_dir=args.onnx_dir,
+            worker_script=args.worker,
+            output_dir=args.output_dir,
+            force=args.force,
+        )
+    except (ValueError, FileExistsError, FileNotFoundError, RuntimeError) as exc:
+        parser.error(str(exc))
+
+    print("Install it with:")
+    print(f'  redsan::edsan_install_trimmer("{archive.as_posix()}")')
+    return archive
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Package compliant trimmer release archive")
-    parser.add_argument("--onnx_dir", type=str, default="artifacts/active_learning/onnx_export")
-    parser.add_argument("--worker", type=str, default="scripts/trim_batch_service.py")
-    parser.add_argument("--output", type=str, default="artifacts/edsan-doc-trimmer-v1.3.0.zip")
-    parser.add_argument("--version", type=str, default="1.3.0")
-    parser.add_argument("--no_cache_install", action="store_true")
-    args = parser.parse_args()
-
-    package_artifact(
-        onnx_dir=args.onnx_dir,
-        worker_script=args.worker,
-        output_zip=args.output,
-        version=args.version,
-        install_to_cache=not args.no_cache_install,
-    )
+    main()

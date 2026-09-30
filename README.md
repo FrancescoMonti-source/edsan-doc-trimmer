@@ -144,23 +144,40 @@ python -m pytest -v
 The production ONNX model (`model.onnx`), tokenizer assets, and training checkpoints are **gitignored** (`artifacts/` in `.gitignore`).
 Committing multi-hundred-megabyte binaries directly to Git would bloat repository history permanently, drastically slow down cloning and branching across hospital networks, and exceed enterprise GitLab push size limits.
 
-The last published runtime archive is `edsan-doc-trimmer-v1.2.0.zip`. The provider-aware worker in this branch is packaged as version `1.3.0`; it uses ONNX Runtime for every inference provider. The old `1.2.0` archive remains a separate legacy release.
+Runtime archives are named `edsan-doc-trimmer-vX.Y.Z.zip` and are built by `scripts/package_artifact.py` (see **Releasing a new archive** below). The worker uses ONNX Runtime for every inference provider.
 
-### Archive Contents (version 1.3.0)
+### Archive Contents
 The provider-aware archive contains everything required for standalone, offline inference with zero internet access:
 * **`model.onnx`** (442.7 MB): The single inference graph, executed through `onnxruntime` with CPU, CUDA, or OpenVINO providers.
 * **`tokenizer.json`**, **`tokenizer_config.json`**, **`special_tokens_map.json`**: Fast Rust / Hugging Face tokenizer assets.
 * **`config.json`**: Sequence classification architecture metadata.
-* **`artifact.json`**: Manifest declaring artifact version `1.3.0` and worker contract `model-only-v1`.
+* **`artifact.json`**: Manifest declaring the artifact version, the worker contract (`model-only-v1`) and the export date.
 * **`trim_batch_service.py`**: Batch worker using one ONNX Runtime inference path and reporting the selected execution provider. PyTorch checkpoint weights are not included in the runtime archive.
 
-### Device selection (version 1.3.0)
+### Device selection
 The worker defaults to `EDSAN_TRIMMER_DEVICE=auto`. Auto selects CUDA for a detected NVIDIA GPU when `CUDAExecutionProvider` is available, OpenVINO for a detected Intel GPU when `OpenVINOExecutionProvider` is available, and otherwise CPU. Set the variable to `cpu`, `cuda`, `openvino`, `dml`, or `migraphx` to override the choice.
 
 If an accelerator is detected but its ONNX Runtime provider is unavailable, the worker continues on CPU and emits a marked warning with an install suggestion, such as `onnxruntime-gpu` for CUDA or `onnxruntime-openvino` plus OpenVINO for Intel. R surfaces these warnings. Table results include `TRIM_EXECUTION_PROVIDER`; character-vector results carry the provider as an attribute.
 
-### 1. Where to Get `edsan-doc-trimmer-v1.2.0.zip`
-* **Hospital Internal GitLab**: Navigate to **Deploy > Releases** (tag `v1.2.0`) and download the attached asset `edsan-doc-trimmer-v1.2.0.zip`.
+### Releasing a new archive (maintainers)
+The training export folder (`artifacts/active_learning/onnx_export`) is never modified by packaging. A release is built in a temporary staging folder from an allowlist of export files (`model.onnx`, the tokenizer files, `config.json`), the worker script and a generated `artifact.json`:
+
+```bash
+# 1. Train and export (writes the export folder)
+# 2. Package; --version is required and must be semantic (X.Y.Z)
+python scripts/package_artifact.py --version X.Y.Z
+# -> artifacts/edsan-doc-trimmer-vX.Y.Z.zip
+# 3. Tag the commit that contains the packaged worker
+git tag vX.Y.Z
+# 4. Upload the zip to GitLab (see docs/GITLAB_RELEASE_GUIDE.md)
+# 5. Install through redsan, the only supported install path:
+#    redsan::edsan_install_trimmer("artifacts/edsan-doc-trimmer-vX.Y.Z.zip")
+```
+
+An existing archive of the same name is refused unless `--force` is passed, and a warning is printed when tag `vX.Y.Z` already exists but does not point at `HEAD`. `artifact.json` takes `exported_at` from the modification date (UTC) of `model.onnx`. After zipping, the archive is re-opened and packaging fails unless it contains exactly the allowlisted files, which guards against shipping `model.safetensors` (~820 MB archives). The script prints the `redsan::edsan_install_trimmer("<zip>")` command when it finishes; it does not install anything itself.
+
+### 1. Where to Get `edsan-doc-trimmer-vX.Y.Z.zip`
+* **Hospital Internal GitLab**: Navigate to **Deploy > Releases** (tag `vX.Y.Z`) and download the attached asset `edsan-doc-trimmer-vX.Y.Z.zip`.
 * **Shared HDW Server Drive**: Pre-extracted or stored under `/data/shared/models/edsan-doc-trimmer/`.
 * *Maintainers*: See **[docs/GITLAB_RELEASE_GUIDE.md](docs/GITLAB_RELEASE_GUIDE.md)** for step-by-step instructions on creating the release and uploading the binary asset via the GitLab Generic Package Registry.
 
@@ -170,12 +187,12 @@ In R, install the model directly using `redsan`:
 ```r
 library(redsan)
 
-# Option A: One-time install from zip into persistent user cache
-edsan_install_trimmer("C:/path/to/edsan-doc-trimmer-v1.2.0.zip")
-# On Linux HDW: edsan_install_trimmer("/path/to/edsan-doc-trimmer-v1.2.0.zip")
+# Option A: One-time install from the zip (the supported install path)
+edsan_install_trimmer("C:/path/to/edsan-doc-trimmer-vX.Y.Z.zip")
+# On Linux HDW: edsan_install_trimmer("/path/to/edsan-doc-trimmer-vX.Y.Z.zip")
 
 # Option B: Point directly to a pre-extracted or shared HDW directory:
-Sys.setenv(EDSAN_TRIMMER_PATH = "/data/shared/models/edsan-doc-trimmer/v1.2.0")
+Sys.setenv(EDSAN_TRIMMER_PATH = "/data/shared/models/edsan-doc-trimmer/vX.Y.Z")
 
 # Python Environment Configuration:
 # redsan automatically detects virtual environments in edsan-doc-trimmer or system Python.
@@ -200,22 +217,22 @@ Colleagues running standalone Python scripts (`scripts/trim_batch_service.py` or
 #### Option A: Extract directly into the repository
 ```bash
 # Linux / macOS:
-unzip edsan-doc-trimmer-v1.2.0.zip -d artifacts/active_learning/onnx_export
+unzip edsan-doc-trimmer-vX.Y.Z.zip -d artifacts/active_learning/onnx_export
 
 # Windows PowerShell:
-Expand-Archive -Path edsan-doc-trimmer-v1.2.0.zip -DestinationPath artifacts/active_learning/onnx_export -Force
+Expand-Archive -Path edsan-doc-trimmer-vX.Y.Z.zip -DestinationPath artifacts/active_learning/onnx_export -Force
 ```
 The scripts automatically detect models located in `artifacts/active_learning/onnx_export`.
 
 #### Option B: Extract to custom folder and set `EDSAN_TRIMMER_PATH`
 ```bash
 # Linux / macOS:
-unzip edsan-doc-trimmer-v1.2.0.zip -d /data/shared/models/edsan-doc-trimmer/v1.2.0
-export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/v1.2.0"
+unzip edsan-doc-trimmer-vX.Y.Z.zip -d /data/shared/models/edsan-doc-trimmer/vX.Y.Z
+export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/vX.Y.Z"
 
 # Windows PowerShell:
-Expand-Archive -Path edsan-doc-trimmer-v1.2.0.zip -DestinationPath "C:\models\edsan-doc-trimmer\v1.2.0" -Force
-$env:EDSAN_TRIMMER_PATH = "C:\models\edsan-doc-trimmer\v1.2.0"
+Expand-Archive -Path edsan-doc-trimmer-vX.Y.Z.zip -DestinationPath "C:\models\edsan-doc-trimmer\vX.Y.Z" -Force
+$env:EDSAN_TRIMMER_PATH = "C:\models\edsan-doc-trimmer\vX.Y.Z"
 ```
 
 Then run scripts without specifying paths:
@@ -232,19 +249,19 @@ To avoid duplicating large models for every data scientist on a shared server, a
 
 1. **Extract once to a shared location**:
    ```bash
-   mkdir -p /data/shared/models/edsan-doc-trimmer/v1.2.0
-   unzip edsan-doc-trimmer-v1.2.0.zip -d /data/shared/models/edsan-doc-trimmer/v1.2.0/
+   mkdir -p /data/shared/models/edsan-doc-trimmer/vX.Y.Z
+   unzip edsan-doc-trimmer-vX.Y.Z.zip -d /data/shared/models/edsan-doc-trimmer/vX.Y.Z/
    chmod -R a+rX /data/shared/models/edsan-doc-trimmer/
    ```
 
 2. **Configure environment variables for all users**:
    * In `/etc/environment` or `/etc/profile.d/edsan.sh`:
      ```bash
-     export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/v1.2.0"
+     export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/vX.Y.Z"
      ```
    * Or in users' `~/.Renviron`:
      ```
-     EDSAN_TRIMMER_PATH=/data/shared/models/edsan-doc-trimmer/v1.2.0
+     EDSAN_TRIMMER_PATH=/data/shared/models/edsan-doc-trimmer/vX.Y.Z
      ```
 
 Both R (`redsan`) and Python (`trim_batch_service.py`, `trim_document.py`) will automatically discover and load the shared model!

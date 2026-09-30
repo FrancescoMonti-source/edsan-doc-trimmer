@@ -119,16 +119,24 @@ the public `redsan` contract.
 On hospital Health Data Warehouse (HDW) platforms, machines are strictly air-gapped without access to public Hugging Face hubs or GitHub.
 
 ### 6.1 Artifact Packaging
-The production model artifact is packaged as `edsan-doc-trimmer-v1.3.0.zip`, containing:
+Packaging never writes to the training export folder. It stages an allowlist of export files plus the worker and a generated manifest, zips them, then re-opens the archive and fails unless it holds exactly the allowlisted files:
+
+```bash
+python scripts/package_artifact.py --version X.Y.Z   # -> artifacts/edsan-doc-trimmer-vX.Y.Z.zip
+```
+
+`--version` is required and must be semantic. An existing archive is only overwritten with `--force`, and a warning is printed when git tag `vX.Y.Z` exists but does not point at `HEAD`. The archive, `edsan-doc-trimmer-vX.Y.Z.zip`, contains:
 * `model.onnx`: DrBERT ONNX graph used with CUDA, OpenVINO, or CPU providers (442.7 MB)
 * `tokenizer.json`, `tokenizer_config.json`, `special_tokens_map.json`: Fast Rust tokenizer assets
 * `config.json`: Sequence classification architecture metadata
-* `artifact.json`: Metadata manifest (`v1.3.0`) whose worker contract is read from the packaged worker
+* `artifact.json`: Generated manifest (version, worker contract read from the packaged worker, `exported_at` from the model file date)
 * `trim_batch_service.py`: High-performance batch inference worker implementing `model-only-v1`
 
+The script ends by printing the `redsan::edsan_install_trimmer("<zip>")` command; it never installs into a user cache.
+
 ### 6.2 Distributing via Internal GitLab
-Follow the step-by-step maintainer instructions in **[docs/GITLAB_RELEASE_GUIDE.md](GITLAB_RELEASE_GUIDE.md)** to:
-1. Create a tag (`v1.3.0`) and release under **Deploy > Releases**.
+The release flow is: train -> `package_artifact.py --version X.Y.Z` -> tag `vX.Y.Z` -> upload -> install via redsan. Follow the step-by-step maintainer instructions in **[docs/GITLAB_RELEASE_GUIDE.md](GITLAB_RELEASE_GUIDE.md)** to:
+1. Create the tag (`vX.Y.Z`) and release under **Deploy > Releases**.
 2. Upload the release zip to the **GitLab Generic Package Registry** via curl.
 3. Link the package URL to the release without bloating Git history.
 
@@ -136,11 +144,11 @@ Follow the step-by-step maintainer instructions in **[docs/GITLAB_RELEASE_GUIDE.
 ```r
 library(redsan)
 
-# Option A: One-time install to user cache from downloaded zip:
-edsan_install_trimmer("/path/to/edsan-doc-trimmer-v1.3.0.zip")
+# Option A: One-time install from the downloaded zip (the only install path):
+edsan_install_trimmer("/path/to/edsan-doc-trimmer-vX.Y.Z.zip")
 
 # Option B: Or point directly to a shared HDW cluster folder:
-Sys.setenv(EDSAN_TRIMMER_PATH = "/data/shared/models/edsan-doc-trimmer/v1.3.0")
+Sys.setenv(EDSAN_TRIMMER_PATH = "/data/shared/models/edsan-doc-trimmer/vX.Y.Z")
 
 # Python Path (if running in a custom virtual environment):
 Sys.setenv(REDSAN_PYTHON_PATH = "/path/to/python")
@@ -153,14 +161,14 @@ trimmed_bundle <- trim_doceds_onnx(bundle)
 ```bash
 # Option 1: Unpack in repo artifacts folder
 # On Linux / macOS:
-unzip edsan-doc-trimmer-v1.3.0.zip -d artifacts/active_learning/onnx_export
+unzip edsan-doc-trimmer-vX.Y.Z.zip -d artifacts/active_learning/onnx_export
 # On Windows PowerShell:
-Expand-Archive -Path edsan-doc-trimmer-v1.3.0.zip -DestinationPath artifacts/active_learning/onnx_export -Force
+Expand-Archive -Path edsan-doc-trimmer-vX.Y.Z.zip -DestinationPath artifacts/active_learning/onnx_export -Force
 
 # Option 2: Set environment variable pointing to pre-extracted folder
-export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/v1.3.0"
+export EDSAN_TRIMMER_PATH="/data/shared/models/edsan-doc-trimmer/vX.Y.Z"
 # In PowerShell:
-# $env:EDSAN_TRIMMER_PATH = "C:\models\edsan-doc-trimmer\v1.3.0"
+# $env:EDSAN_TRIMMER_PATH = "C:\models\edsan-doc-trimmer\vX.Y.Z"
 
 # Auto-resolves and executes:
 python scripts/trim_document.py
