@@ -152,7 +152,7 @@ def test_device_override_uses_the_requested_onnx_provider(
     assert result["execution_provider"] == provider
 
 
-def test_missing_cuda_provider_falls_back_with_marked_install_suggestion(
+def test_auto_missing_cuda_provider_silently_uses_cpu(
     monkeypatch, capsys, onnx_runtime
 ):
     monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "auto")
@@ -168,8 +168,7 @@ def test_missing_cuda_provider_falls_back_with_marked_install_suggestion(
     assert onnx_runtime["providers"] == ["CPUExecutionProvider"]
     assert result["execution_provider"] == "CPUExecutionProvider"
     captured = capsys.readouterr()
-    assert "EDSAN_TRIMMER_NOTICE:WARNING:" in captured.err
-    assert "onnxruntime-gpu" in captured.err
+    assert "EDSAN_TRIMMER_NOTICE:" not in captured.err
 
 
 def test_auto_prefers_cuda_when_both_gpu_providers_are_available(
@@ -203,7 +202,7 @@ def test_unknown_device_override_is_rejected(monkeypatch, onnx_runtime):
         worker.trim_batch([{"id": "doc-1", "text": "Clinical narrative"}])
 
 
-def test_missing_openvino_provider_suggests_install_and_uses_cpu(
+def test_auto_missing_openvino_provider_silently_uses_cpu(
     monkeypatch, capsys, onnx_runtime
 ):
     monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "auto")
@@ -219,9 +218,43 @@ def test_missing_openvino_provider_suggests_install_and_uses_cpu(
     captured = capsys.readouterr()
     assert onnx_runtime["providers"] == ["CPUExecutionProvider"]
     assert result["execution_provider"] == "CPUExecutionProvider"
+    assert "EDSAN_TRIMMER_NOTICE:" not in captured.err
+
+
+def test_explicit_openvino_request_without_provider_warns_and_uses_cpu(
+    monkeypatch, capsys, onnx_runtime
+):
+    monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "openvino")
+    monkeypatch.setattr(
+        worker.ort,
+        "get_available_providers",
+        lambda: ["CPUExecutionProvider"],
+    )
+
+    result = worker.trim_batch([{"id": "doc-1", "text": "Clinical narrative"}])[0]
+
+    assert result["execution_provider"] == "CPUExecutionProvider"
+    assert onnx_runtime["providers"] == ["CPUExecutionProvider"]
+    captured = capsys.readouterr()
     assert "EDSAN_TRIMMER_NOTICE:WARNING:" in captured.err
-    assert "onnxruntime-openvino" in captured.err
-    assert "OpenVINO runtime" in captured.err
+    assert "Requested openvino mode" in captured.err
+
+
+def test_auto_uses_available_intel_gpu_without_warning_for_missing_cuda(
+    monkeypatch, capsys, onnx_runtime
+):
+    monkeypatch.setenv("EDSAN_TRIMMER_DEVICE", "auto")
+    monkeypatch.setattr(worker, "_detect_accelerators", lambda: {"nvidia", "intel"})
+    monkeypatch.setattr(
+        worker.ort,
+        "get_available_providers",
+        lambda: ["OpenVINOExecutionProvider", "CPUExecutionProvider"],
+    )
+
+    result = worker.trim_batch([{"id": "doc-1", "text": "Clinical narrative"}])[0]
+
+    assert result["execution_provider"] == "OpenVINOExecutionProvider"
+    assert "EDSAN_TRIMMER_NOTICE:" not in capsys.readouterr().err
 
 
 def test_provider_initialization_failure_retries_with_cpu(
