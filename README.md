@@ -163,7 +163,7 @@ To never run on the CPU, set `EDSAN_TRIMMER_DEVICE=gpu`. It picks the first GPU 
 
 ONNX Runtime's CPU, GPU and OpenVINO packages share one module name, so a Python environment can hold only one of them. With uv, `uv sync` installs the CPU build; on an NVIDIA machine run `uv sync --no-group cpu --group gpu --extra dev`.
 
-If an accelerator is detected but its ONNX Runtime provider is unavailable, the worker continues on CPU and emits a marked warning with an install suggestion, such as `onnxruntime-gpu` for CUDA or `onnxruntime-openvino` plus OpenVINO for Intel. R surfaces these warnings. Table results include `TRIM_EXECUTION_PROVIDER`; character-vector results carry the provider as an attribute.
+In `auto` mode, missing GPU providers are normal: the worker silently selects an available GPU or CPU. Explicit requests for unavailable providers (`cuda`, `openvino`, etc.) warn and fall back to CPU, while `gpu` mode errors if no GPU provider can run. A GPU provider that fails during initialization or inference also generates a warning before falling back to CPU. Table results include `TRIM_EXECUTION_PROVIDER`; character-vector results carry the provider as an attribute.
 
 ### Releasing a new archive (maintainers)
 The training export folder (`artifacts/active_learning/onnx_export`) is never modified by packaging. A release is built in a temporary staging folder from an allowlist of export files (`model.onnx`, the tokenizer files, `config.json`), the worker script and a generated `artifact.json`:
