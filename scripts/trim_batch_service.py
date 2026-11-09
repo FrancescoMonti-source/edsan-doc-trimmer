@@ -445,37 +445,15 @@ def _select_execution_provider(
         ("nvidia", "cuda", "NVIDIA"),
         ("intel", "openvino", "Intel"),
     )
-    missing: list[tuple[str, str, str]] = []
-    for vendor, mode_name, label in priority:
+    for vendor, mode_name, _label in priority:
         if vendor not in detected:
             continue
         provider = DEVICE_PROVIDERS[mode_name]
         if provider in available:
-            notices = [
-                (
-                    "WARNING",
-                    (
-                        f"{missing_label} GPU detected, but {missing_provider} is "
-                        f"unavailable; using {provider}. "
-                        f"{PROVIDER_INSTALL_HINTS[missing_mode]}"
-                    ),
-                )
-                for missing_label, missing_mode, missing_provider in missing
-            ]
-            return provider, notices
-        missing.append((label, mode_name, provider))
+            # In auto mode, a missing accelerator is not a failure.
+            return provider, []
 
-    notices = [
-        (
-            "WARNING",
-            (
-                f"{label} GPU detected, but {provider} is unavailable; falling back "
-                f"to {cpu_provider}. {PROVIDER_INSTALL_HINTS[mode_name]}"
-            ),
-        )
-        for label, mode_name, provider in missing
-    ]
-    return cpu_provider, notices
+    return cpu_provider, []
 
 
 def _emit_runtime_notices(notices: list[tuple[str, str]]) -> None:
